@@ -5,9 +5,14 @@ on:
     inputs:
       resume_run_id:
         description: GitHub run ID whose artifact contains the previous agent
-        required: true
-        default: "33358274695"
+        required: false
+        default: ""
         type: string
+      fresh_start:
+        description: Start a new 200-step SAC agent with an empty replay buffer
+        required: true
+        default: true
+        type: boolean
       solver_wall_seconds:
         description: Candidate per-solve execution guard, not a final hyperparameter
         required: true
@@ -25,17 +30,19 @@ permissions:
 jobs:
   continuous-sync3-checkpoint-stream:
     runs-on: ubuntu-22.04
-    timeout-minutes: 330
+    timeout-minutes: 355
     env:
       NMPC_MAX_WALL_SECONDS: ${{ inputs.solver_wall_seconds }}
       SAC_RESUME_RUN_ID: ${{ inputs.resume_run_id }}
       SAC_ATTEMPT_ID: ${{ github.run_id }}
       SAC_RESUME_ROOT: ${{ github.workspace }}/resume_input
+      SAC_FRESH_START: ${{ inputs.fresh_start }}
     steps:
       - name: Check out public research package
         uses: actions/checkout@v6
 
       - name: Download previous SAC artifact
+        if: ${{ !inputs.fresh_start }}
         uses: actions/download-artifact@v4
         with:
           pattern: sac-nmpc-*-${{ inputs.resume_run_id }}
@@ -53,7 +60,7 @@ jobs:
           cache: true
 
       - name: Train continuously with 10-episode checkpoints
-        timeout-minutes: 300
+        timeout-minutes: 330
         uses: matlab-actions/run-command@v3
         with:
           command: addpath('experiments'); run_targeted_sac_checkpoint_stream

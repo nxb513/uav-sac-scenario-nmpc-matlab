@@ -1,0 +1,34 @@
+name: MATLAB build 200-step specialist bank
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-validate-bank:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out public research package
+        uses: actions/checkout@v6
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          cache: true
+
+      - name: Build and validate 200-step context bank
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); build_targeted_200step_compact_bank
+
+      - name: Upload validated bank
+        uses: actions/upload-artifact@v4
+        with:
+          name: targeted-200step-context-bank-${{ github.run_id }}
+          path: results/targeted_lqr_weak_rebuild_v1/specialist_local_context_banks_200step_v1/
+          if-no-files-found: error
+          retention-days: 7

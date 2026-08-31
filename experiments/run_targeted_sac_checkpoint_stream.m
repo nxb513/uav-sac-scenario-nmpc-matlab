@@ -18,10 +18,21 @@ assert(~cfg.training.finalBudgetLocked, ...
 assert(cfg.training.workerCount == 3, ...
     'The approved checkpoint stream requires three synchronous workers.');
 
-resumeRoot = strtrim(getenv('SAC_RESUME_ROOT'));
-assert(~isempty(resumeRoot) && isfolder(resumeRoot), ...
-    'SAC_RESUME_ROOT must point to an extracted previous artifact.');
-[agent, savedAgentResult, resume] = load_latest_resume(resumeRoot);
+freshStart = strcmpi(strtrim(getenv('SAC_FRESH_START')), 'true');
+if freshStart
+    agent = [];
+    savedAgentResult = [];
+    resume = struct('Type', 'fresh_200_step_agent_no_replay', ...
+        'TrainingEpisode', 0, 'GlobalEpisodeOffset', 0, ...
+        'SourceTrainingEpisode', 0, ...
+        'SourceGlobalEpisodeOffset', 0, ...
+        'SkippedNewerCheckpointCount', 0, 'SourcePath', '');
+else
+    resumeRoot = strtrim(getenv('SAC_RESUME_ROOT'));
+    assert(~isempty(resumeRoot) && isfolder(resumeRoot), ...
+        'SAC_RESUME_ROOT must point to an extracted previous artifact.');
+    [agent, savedAgentResult, resume] = load_latest_resume(resumeRoot);
+end
 cfg.training.executionEpisodeCeiling = resume.TrainingEpisode + ...
     cfg.training.executionEpisodeHeadroom;
 cfg.environment.episodeIndexOffset = resume.GlobalEpisodeOffset;
@@ -63,7 +74,12 @@ rng(cfg.environment.baseEpisodeSeed + resume.GlobalEpisodeOffset, 'twister');
 [env, observationInfo, actionInfo] = ...
     create_targeted_sac_nmpc_environment(cfg, runDir, contextBank);
 clear contextBank;
-validate_agent_specs(agent, observationInfo, actionInfo, cfg);
+if freshStart
+    agent = build_agent(observationInfo, actionInfo, cfg);
+    save(fullfile(runDir, 'initial_agent.mat'), 'agent', '-v7.3');
+else
+    validate_agent_specs(agent, observationInfo, actionInfo, cfg);
+end
 clear observationInfo actionInfo;
 
 if isempty(savedAgentResult)
@@ -77,10 +93,12 @@ startedAt = datetime('now', 'TimeZone', 'local');
 write_text(fullfile(runDir, 'RUNNING.txt'), sprintf( ...
     ['started_at=%s\nmode=continuous_sync3_checkpoint_stream\n' ...
     'worker_count=3\ncheckpoint_frequency_episodes=10\n' ...
-    'research_budget_locked=false\nexecution_stop=external_job_limit\n' ...
+    'research_budget_locked=false\nexecution_stop=330_minute_train_step\n' ...
+    'episode_steps=%d\nfresh_start=%d\n' ...
     'resume_type=%s\nresume_training_episode=%d\n' ...
     'global_episode_offset=%d\nresume_source=%s\n'], ...
-    char(startedAt), resume.Type, resume.TrainingEpisode, ...
+    char(startedAt), cfg.environment.stepsPerEpisode, freshStart, ...
+    resume.Type, resume.TrainingEpisode, ...
     resume.GlobalEpisodeOffset, resume.SourcePath));
 
 clock = tic;
@@ -238,6 +256,30 @@ options.UseParallel = true;
 options.ParallelizationOptions.Mode = 'sync';
 options.ParallelizationOptions.WorkerRandomSeeds = ...
     cfg.training.workerRandomSeeds(1:cfg.training.workerCount);
+end
+
+function agent = build_agent(observationInfo, actionInfo, cfg)
+options = rlSACAgentOptions;
+options.SampleTime = cfg.environment.sampleTime;
+options.DiscountFactor = cfg.agent.discountFactor;
+options.ExperienceBufferLength = cfg.agent.experienceBufferLength;
+options.MiniBatchSize = cfg.agent.miniBatchSize;
+options.NumWarmStartSteps = cfg.agent.numWarmStartSteps;
+options.TargetSmoothFactor = cfg.agent.targetSmoothFactor;
+options.LearningFrequency = 1;
+options.NumEpoch = 1;
+options.MaxMiniBatchPerEpoch = 1;
+options.ActorOptimizerOptions.LearnRate = cfg.agent.actorLearnRate;
+for index = 1:numel(options.CriticOptimizerOptions)
+    options.CriticOptimizerOptions(index).LearnRate = ...
+        cfg.agent.criticLearnRate;
+end
+options.EntropyWeightOptions.LearnRate = cfg.agent.entropyLearnRate;
+agent = rlSACAgent(observationInfo, actionInfo, options);
+agent.AgentOptions.InfoToSave.ExperienceBuffer = true;
+agent.AgentOptions.InfoToSave.Optimizer = true;
+agent.AgentOptions.InfoToSave.PolicyState = true;
+agent.AgentOptions.InfoToSave.Target = true;
 end
 
 function savedResult = update_resume_options(savedResult, cfg, checkpointDir)

@@ -111,14 +111,18 @@ cfg.weakness.constraintMarginFraction = [0.20, 0.10, 0.05];
 cfg.weakness.minimumTeacherPositionGainM = 0.01;
 cfg.weakness.minimumTeacherRelativeGain = 0.10;
 
-cfg.specialistBank.outputSubfolder = 'specialist_local_context_banks_v2';
+cfg.specialistBank.sourceSubfolder = 'specialist_local_context_banks_v2';
+cfg.specialistBank.outputSubfolder = ...
+    'specialist_local_context_banks_200step_v1';
 cfg.specialistBank.trainReplicatesPerCell = 20;
 cfg.specialistBank.validationReplicatesPerCell = 10;
 cfg.specialistBank.rankingWindowSteps = 10;
-cfg.specialistBank.localEpisodeSteps = 20;
+cfg.specialistBank.sourceStepCount = 400;
+cfg.specialistBank.localEpisodeSteps = 200;
 cfg.specialistBank.maximumPredictionHorizon = 20;
 cfg.specialistBank.trainContextsPerCell = 10;
 cfg.specialistBank.validationContextsPerCell = 5;
+cfg.specialistBank.cloudContextsPerCell = 1;
 cfg.specialistBank.minimumStartStep = 10;
 cfg.specialistBank.positionScoreScaleM = 0.10;
 cfg.specialistBank.attitudeScoreScaleDeg = 5.0;

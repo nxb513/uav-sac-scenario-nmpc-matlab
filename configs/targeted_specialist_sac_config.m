@@ -3,7 +3,7 @@ function cfg = targeted_specialist_sac_config()
 
 targeted = targeted_lqr_weak_config();
 cfg.name = 'targeted_specialist_sac_v1';
-cfg.status = '100_transition_probe_final_budget_not_locked';
+cfg.status = 'official_200_step_checkpoint_stream_final_budget_not_locked';
 cfg.targeted = targeted;
 cfg.trainingBankPath = fullfile(targeted.resultRoot, ...
     targeted.specialistBank.outputSubfolder, ...
