@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   continuous-sync3-checkpoint-stream:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 330
     env:
       NMPC_MAX_WALL_SECONDS: ${{ inputs.solver_wall_seconds }}
@@ -54,7 +54,6 @@ jobs:
 
       - name: Train continuously with 10-episode checkpoints
         timeout-minutes: 300
-        continue-on-error: true
         uses: matlab-actions/run-command@v3
         with:
           command: addpath('experiments'); run_targeted_sac_checkpoint_stream
