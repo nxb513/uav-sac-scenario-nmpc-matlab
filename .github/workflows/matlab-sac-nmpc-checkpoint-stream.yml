@@ -1,0 +1,69 @@
+name: MATLAB SAC-NMPC checkpoint stream
+
+on:
+  workflow_dispatch:
+    inputs:
+      resume_run_id:
+        description: GitHub run ID whose artifact contains the previous agent
+        required: true
+        default: "33358274695"
+        type: string
+      solver_wall_seconds:
+        description: Candidate per-solve execution guard, not a final hyperparameter
+        required: true
+        default: "60"
+        type: choice
+        options:
+          - "30"
+          - "60"
+          - "120"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  continuous-sync3-checkpoint-stream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      NMPC_MAX_WALL_SECONDS: ${{ inputs.solver_wall_seconds }}
+      SAC_RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+      SAC_ATTEMPT_ID: ${{ github.run_id }}
+      SAC_RESUME_ROOT: ${{ github.workspace }}/resume_input
+    steps:
+      - name: Check out public research package
+        uses: actions/checkout@v6
+
+      - name: Download previous SAC artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sac-nmpc-*-${{ inputs.resume_run_id }}
+          path: resume_input
+          merge-multiple: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.resume_run_id }}
+
+      - name: Set up MATLAB and required products
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: Reinforcement_Learning_Toolbox Deep_Learning_Toolbox Optimization_Toolbox Parallel_Computing_Toolbox Control_System_Toolbox
+          cache: true
+
+      - name: Train continuously with 10-episode checkpoints
+        timeout-minutes: 300
+        continue-on-error: true
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); run_targeted_sac_checkpoint_stream
+
+      - name: Upload logs and recoverable checkpoints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sac-nmpc-checkpoint-stream-${{ github.run_id }}
+          path: results/targeted_lqr_weak_rebuild_v1/specialist_sac_v1/checkpoint_stream_runs/
+          if-no-files-found: error
+          retention-days: 7

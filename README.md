@@ -64,6 +64,24 @@ The artifact includes configuration, episode manifests/logs, MATLAB diary,
 runtime summary, training statistics, and initial/final agent checkpoints.
 `SolverTimedOut` is recorded at every environment step.
 
+## Continuous checkpoint stream
+
+After the timing pilot is validated, the manual workflow **MATLAB SAC-NMPC
+checkpoint stream** continues the same central SAC agent with three
+synchronous workers. It deliberately has no approved research episode or
+transition budget. The MATLAB training step runs until its five-hour GitHub
+execution limit and saves an exact-resume `AgentK.mat` every 10 episodes.
+
+Provide the previous GitHub run ID when dispatching the workflow. The code
+recursively selects the numerically largest valid `AgentK.mat`. If the
+previous artifact is the corrected pilot and has no periodic checkpoint, it
+starts from `final_agent.mat`. If execution stops after episode 96, for
+example, only `Agent90.mat` is resumed; episodes 91--96 are discarded.
+
+The five-hour limit is an execution boundary, not a final SAC budget. Each
+new run is dispatched manually after checking the preceding artifact; the
+workflow does not chain jobs automatically.
+
 ## Scope and licensing
 
 This repository is a public computational pilot, not the complete research
@@ -71,4 +89,3 @@ project. It contains no papers, manuscript, OOD test set, hybrid-controller
 results, legacy checkpoints, or private credentials. No reuse license has
 been selected yet; publication on GitHub does not by itself grant an
 open-source license.
-

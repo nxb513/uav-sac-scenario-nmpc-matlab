@@ -18,7 +18,7 @@ env = rlFunctionEnv(observationInfo, actionInfo, ...
 
     function [initialObservation, info] = reset_environment()
         workerId = current_worker_id();
-        episodeIndex = next_worker_episode_index(runDir, workerId);
+        episodeIndex = next_worker_episode_index(runDir, workerId, cfg);
         episodeSeed = cfg.environment.baseEpisodeSeed + ...
             workerId * cfg.environment.workerSeedStride + episodeIndex;
         previousRng = rng;
@@ -217,7 +217,7 @@ else
 end
 end
 
-function episodeIndex = next_worker_episode_index(runDir, workerId)
+function episodeIndex = next_worker_episode_index(runDir, workerId, cfg)
 persistent counterByWorker
 if isempty(counterByWorker)
     counterByWorker = containers.Map('KeyType', 'char', ...
@@ -230,7 +230,11 @@ if ~isKey(counterByWorker, key)
     counterByWorker(key) = manifest_row_count(manifestPath);
 end
 counterByWorker(key) = counterByWorker(key) + 1;
-episodeIndex = counterByWorker(key);
+episodeIndexOffset = 0;
+if isfield(cfg.environment, 'episodeIndexOffset')
+    episodeIndexOffset = cfg.environment.episodeIndexOffset;
+end
+episodeIndex = episodeIndexOffset + counterByWorker(key);
 end
 
 function rowCount = manifest_row_count(path)
