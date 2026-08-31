@@ -9,7 +9,7 @@ cfg.status = 'checkpoint_stream_final_budget_not_locked';
 cfg.training.activeMode = 'continuous_sync3_checkpoint_stream';
 cfg.training.activeWorkerCount = cfg.training.workerCount;
 cfg.training.checkpointFrequencyEpisodes = 10;
-cfg.training.executionEpisodeCeiling = 1e9;
+cfg.training.executionEpisodeHeadroom = 100000;
 cfg.environment.forceCurriculumStage = cfg.probe.forceCurriculumStage;
 cfg.logging.enabled = true;
 
@@ -22,6 +22,8 @@ resumeRoot = strtrim(getenv('SAC_RESUME_ROOT'));
 assert(~isempty(resumeRoot) && isfolder(resumeRoot), ...
     'SAC_RESUME_ROOT must point to an extracted previous artifact.');
 [agent, savedAgentResult, resume] = load_latest_resume(resumeRoot);
+cfg.training.executionEpisodeCeiling = resume.TrainingEpisode + ...
+    cfg.training.executionEpisodeHeadroom;
 cfg.environment.episodeIndexOffset = resume.GlobalEpisodeOffset;
 cfg.resume = rmfield(resume, {'SourcePath'});
 
