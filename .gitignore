@@ -1,0 +1,14 @@
+# MATLAB-generated files
+*.asv
+*.autosave
+slprj/
+codegen/
+
+# Local and workflow outputs
+results/targeted_lqr_weak_rebuild_v1/specialist_sac_v1/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+
