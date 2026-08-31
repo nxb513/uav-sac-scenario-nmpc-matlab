@@ -47,7 +47,11 @@ pool = gcp('nocreate');
 if ~isempty(pool)
     delete(pool);
 end
-parpool('local', cfg.training.workerCount);
+cluster = parcluster('Processes');
+if cluster.NumWorkers < cfg.training.workerCount
+    cluster.NumWorkers = cfg.training.workerCount;
+end
+parpool(cluster, cfg.training.workerCount);
 
 rng(cfg.environment.baseEpisodeSeed, 'twister');
 [env, observationInfo, actionInfo] = ...
