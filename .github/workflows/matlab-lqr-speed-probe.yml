@@ -1,0 +1,35 @@
+name: MATLAB LQR 10 mps circle probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lqr-speed-probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out public research package
+        uses: actions/checkout@v6
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          cache: true
+
+      - name: Run frozen LQR speed probe
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); run_lqr_circle_10mps_r10_probe
+
+      - name: Upload probe metrics and figures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lqr-circle-10mps-r10-${{ github.run_id }}
+          path: results/targeted_lqr_weak_rebuild_v1/lqr_circle_10mps_r10_probe/
+          if-no-files-found: error
+          retention-days: 7
