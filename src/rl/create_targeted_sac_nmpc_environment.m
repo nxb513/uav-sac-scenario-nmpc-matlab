@@ -13,20 +13,19 @@ actionInfo.Name = 'targeted_weight_and_nmpc_structure_action';
 actionInfo.LowerLimit = -ones(cfg.action.dimension, 1);
 actionInfo.UpperLimit = ones(cfg.action.dimension, 1);
 
-episodeCounter = 0;
 env = rlFunctionEnv(observationInfo, actionInfo, ...
     @step_environment, @reset_environment);
 
     function [initialObservation, info] = reset_environment()
-        episodeCounter = episodeCounter + 1;
         workerId = current_worker_id();
+        episodeIndex = next_worker_episode_index(runDir, workerId);
         episodeSeed = cfg.environment.baseEpisodeSeed + ...
-            workerId * cfg.environment.workerSeedStride + episodeCounter;
+            workerId * cfg.environment.workerSeedStride + episodeIndex;
         previousRng = rng;
         cleanup = onCleanup(@() rng(previousRng));
         rng(episodeSeed, 'twister');
 
-        stageIndex = curriculum_stage(episodeCounter, cfg);
+        stageIndex = curriculum_stage(episodeIndex, cfg);
         eligible = eligible_contexts(contextBank, stageIndex);
         contextIndex = eligible(randi(numel(eligible)));
         scenario = contextBank(contextIndex);
@@ -44,7 +43,7 @@ env = rlFunctionEnv(observationInfo, actionInfo, ...
             cfg.nmpc.scenario.method);
 
         info.WorkerId = workerId;
-        info.EpisodeIndex = episodeCounter;
+        info.EpisodeIndex = episodeIndex;
         info.EpisodeSeed = episodeSeed;
         info.ContextIndex = contextIndex;
         info.ContextEpisodeIndex = scenario.SourceEpisodeIndex;
@@ -216,6 +215,38 @@ if isempty(task)
 else
     workerId = task.ID;
 end
+end
+
+function episodeIndex = next_worker_episode_index(runDir, workerId)
+persistent counterByWorker
+if isempty(counterByWorker)
+    counterByWorker = containers.Map('KeyType', 'char', ...
+        'ValueType', 'double');
+end
+key = sprintf('%s|worker_%02d', char(runDir), workerId);
+if ~isKey(counterByWorker, key)
+    manifestPath = fullfile(runDir, sprintf('worker_%02d', workerId), ...
+        'episode_manifest.csv');
+    counterByWorker(key) = manifest_row_count(manifestPath);
+end
+counterByWorker(key) = counterByWorker(key) + 1;
+episodeIndex = counterByWorker(key);
+end
+
+function rowCount = manifest_row_count(path)
+rowCount = 0;
+if ~isfile(path)
+    return;
+end
+fileId = fopen(path, 'r');
+assert(fileId >= 0, 'Cannot open %s.', path);
+cleanup = onCleanup(@() fclose(fileId));
+lineCount = 0;
+while ischar(fgetl(fileId))
+    lineCount = lineCount + 1;
+end
+rowCount = max(0, lineCount - 1);
+clear cleanup;
 end
 
 function [reward, components, constraintViolation] = compute_reward( ...
