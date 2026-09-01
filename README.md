@@ -47,17 +47,25 @@ is not silently imposed on other experiments.
 
 ## Run on GitHub Actions
 
-The obsolete low-speed context bank has been removed. Do not dispatch the SAC
-checkpoint stream until the revised LQR/reference bank and divergence
-thresholds are frozen and a replacement context artifact is added. The
-contract-validation and LQR probe workflows are safe to run now.
+The obsolete low-speed context bank has been removed. First run **MATLAB
+retune strong targeted LQR**. It evaluates the approved full 250-candidate
+search on independent 1,350-episode design and selection banks using three
+workers. Its output is stored as
+`lqr-retune-speed-envelope-v4-<run-id>` for 14 days.
+
+Do not dispatch the SAC checkpoint stream until this LQR is frozen, the fresh
+2,700-episode weakness screen is complete, the 20-step divergence thresholds
+are approved, and a replacement context artifact is added.
 
 1. Keep this repository public.
-2. Open **Actions > MATLAB SAC-NMPC checkpoint stream**.
-3. For a fresh run, select `fresh_start=true`. For a resume, enter the prior
+2. Open **Actions > MATLAB retune strong targeted LQR** and dispatch it.
+3. Download and review the `lqr-retune-speed-envelope-v4-*` artifact.
+4. After all downstream gates above are complete, open **Actions > MATLAB
+   SAC-NMPC checkpoint stream**.
+5. For a fresh SAC run, select `fresh_start=true`. For a resume, enter the prior
    run ID and select `fresh_start=false`.
-4. Choose the candidate per-solve guard and run the workflow.
-5. Download the `sac-nmpc-checkpoint-stream-*` artifact when the job ends.
+6. Choose the candidate per-solve guard and run the workflow.
+7. Download the `sac-nmpc-checkpoint-stream-*` artifact when the job ends.
 
 The job uses the official
 [`matlab-actions/setup-matlab@v3`](https://github.com/matlab-actions/setup-matlab)
@@ -69,7 +77,15 @@ license file, batch token, MATLAB Compiler, or MATLAB Coder is included.
 
 ## Expected outputs
 
-Outputs are written under:
+The LQR retune writes:
+
+```text
+results/targeted_lqr_weak_rebuild_v1/lqr_retune_speed_envelope_v4/
+```
+
+It contains the two reproducible bank manifests, all candidate metrics,
+rankings, frozen `selected_lqr.mat`, report and completion marker. SAC outputs
+are written under:
 
 ```text
 results/targeted_lqr_weak_rebuild_v1/specialist_sac_v1/

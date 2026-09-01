@@ -1,0 +1,36 @@
+name: MATLAB retune strong targeted LQR
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  retune-lqr:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - name: Check out public research package
+        uses: actions/checkout@v6
+
+      - name: Set up MATLAB and required products
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: Control_System_Toolbox Parallel_Computing_Toolbox Statistics_and_Machine_Learning_Toolbox
+          cache: true
+
+      - name: Retune strong LQR on approved speed envelope
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); retune_targeted_lqr_baseline
+
+      - name: Upload LQR retune artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lqr-retune-speed-envelope-v4-${{ github.run_id }}
+          path: results/targeted_lqr_weak_rebuild_v1/lqr_retune_speed_envelope_v4/
+          if-no-files-found: warn
+          retention-days: 14

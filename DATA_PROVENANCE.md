@@ -27,3 +27,12 @@ three acceleration targets, with geometry jitter and deterministic
 within-cell stratification. Contract tests rebuild a 1,350-episode manifest in
 memory and verify all eight speeds and all three load targets in each of the
 135 factorial cells.
+
+## Strong-LQR selection artifact
+
+The manual LQR workflow rebuilds independent design and selection banks from
+seeds `300830801` and `300830901`. It evaluates 125 coarse candidates, 125
+local-refinement candidates and the top five on the independent selection
+bank. This is validation-only model selection; no OOD confirmation realization
+is opened. Generated artifacts are uploaded by GitHub Actions and are not
+committed automatically.

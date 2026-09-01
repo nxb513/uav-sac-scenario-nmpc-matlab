@@ -7,7 +7,7 @@ function cfg = targeted_lqr_weak_config()
 plant = step1_plant_config();
 
 cfg.name = 'targeted_lqr_weak_rebuild_v1';
-cfg.status = 'speed_envelope_approved_lqr_bank_pending';
+cfg.status = 'speed_envelope_approved_lqr_retune_authorized';
 cfg.resultRoot = fullfile('results', cfg.name);
 cfg.sampleTime = 0.05;
 cfg.stepCount = 200;
@@ -58,7 +58,7 @@ cfg.uncertainty.targeted.rho = [0.18; ...
 cfg.uncertainty.stratumNames = {'low', 'medium', 'high'};
 cfg.uncertainty.stratumXiMagnitude = [0, 1/3; 1/3, 2/3; 2/3, 1];
 
-cfg.retune.outputSubfolder = 'lqr_retune_balanced_v3';
+cfg.retune.outputSubfolder = 'lqr_retune_speed_envelope_v4';
 cfg.screenBenchmark.replicatesPerCell = 20;
 cfg.screenBenchmark.episodeCount = 2700;
 cfg.screenBenchmark.seed = 300830201;
@@ -108,7 +108,8 @@ cfg.retune.grid.screenCandidateCount = 250;
 cfg.retune.grid.selectionCandidateCount = 5;
 cfg.retune.parallel.enabled = true;
 cfg.retune.parallel.workerCount = 3;
-cfg.retune.status = 'candidate_grid_requires_runtime_check';
+cfg.retune.status = 'approved_250_candidate_search';
+cfg.retune.longRunAuthorized = true;
 
 % These thresholds seed the LQR-only screening benchmark. They must be
 % revisited after observing the candidate-bank distributions.

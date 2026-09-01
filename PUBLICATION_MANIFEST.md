@@ -9,6 +9,7 @@ The public package contains only:
 - the episode-based continuous sync-3 checkpoint-stream entry point;
 - the five-family reference-feasibility screen and contract tests;
 - the approved speed/load-stratified reference sampler and bank builder;
+- the full 250-candidate strong-LQR retune runner;
 - manual GitHub Actions workflows for contract validation, probes and the
   staged checkpoint stream;
 - the nominal reference-feasibility CSV/MAT artifact and report;
