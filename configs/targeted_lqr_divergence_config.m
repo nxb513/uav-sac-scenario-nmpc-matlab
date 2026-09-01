@@ -26,6 +26,7 @@ cfg.growth.minimumConsecutiveSteps = 3;
 cfg.candidateGrid.positionM = [0.10, 0.15, 0.20, 0.25];
 cfg.candidateGrid.attitudeDeg = [5, 10, 15, 20];
 cfg.candidateGrid.velocityMps = [0.30, 0.50, 0.75, 1.00];
+cfg.candidateGrid.bodyRateRadps = [1.0, 2.0, 3.0, 4.0];
 cfg.candidateGrid.growthFactor = [1.25, 1.50, 2.00];
 cfg.candidateGrid.minimumConsecutiveSteps = [3, 5];
 

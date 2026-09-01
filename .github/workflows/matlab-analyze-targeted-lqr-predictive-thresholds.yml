@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
-      LQR_ANALYSIS_OUTPUT_ROOT: ${{ github.workspace }}/results/targeted_lqr_weak_rebuild_v1/lqr_predictive_threshold_analysis_workflow_${{ github.run_id }}
+      LQR_ANALYSIS_OUTPUT_ROOT: ${{ github.workspace }}/results/targeted_lqr_weak_rebuild_v1/lqr_predictive_threshold_analysis_v3_workflow_${{ github.run_id }}
     steps:
       - name: Check out public research package
         uses: actions/checkout@v6
@@ -58,7 +58,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: lqr-predictive-threshold-analysis-v1-${{ github.run_id }}
-          path: results/targeted_lqr_weak_rebuild_v1/lqr_predictive_threshold_analysis_workflow_${{ github.run_id }}/
+          name: lqr-predictive-threshold-analysis-v3-${{ github.run_id }}
+          path: results/targeted_lqr_weak_rebuild_v1/lqr_predictive_threshold_analysis_v3_workflow_${{ github.run_id }}/
           if-no-files-found: warn
           retention-days: 14
