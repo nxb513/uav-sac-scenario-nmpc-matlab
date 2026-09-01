@@ -1,0 +1,57 @@
+name: MATLAB screen targeted LQR weakness
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful v6 run containing the frozen selected_lqr.mat
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  screen-lqr-weakness:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      LQR_FROZEN_ROOT: ${{ github.workspace }}/frozen_lqr
+      LQR_SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+    steps:
+      - name: Check out public research package
+        uses: actions/checkout@v6
+
+      - name: Download frozen v6 LQR artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: lqr-retune-realized-coverage-v6-${{ inputs.source_run_id }}
+          path: frozen_lqr
+          merge-multiple: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Set up MATLAB and required products
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: Control_System_Toolbox Statistics_and_Machine_Learning_Toolbox
+          cache: true
+
+      - name: Build fresh bank and screen frozen LQR
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); build_targeted_lqr_validation_bank; screen_targeted_lqr_validation_bank
+
+      - name: Upload LQR weakness-screen artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lqr-weakness-screen-realized-coverage-v3-${{ github.run_id }}
+          path: |
+            results/targeted_lqr_weak_rebuild_v1/validation_bank_realized_coverage_v3/
+            results/targeted_lqr_weak_rebuild_v1/lqr_screen_realized_coverage_v3/
+          if-no-files-found: warn
+          retention-days: 14

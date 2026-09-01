@@ -78,15 +78,16 @@ cfg.screenBenchmark.disturbanceLevels = [1, 3];
 cfg.screenBenchmark.uncertaintyDomain = 'targeted';
 cfg.screenBenchmark.disturbanceDomain = 'train';
 cfg.screenBenchmark.evaluationStartStep = 5;
-cfg.screenBenchmark.bankOutputSubfolder = 'validation_bank_balanced_v2';
+cfg.screenBenchmark.bankOutputSubfolder = ...
+    'validation_bank_realized_coverage_v3';
 cfg.screenBenchmark.initialStateStd = [0.03 * ones(3, 1); ...
     deg2rad(2.0) * ones(3, 1); 0.05 * ones(3, 1); ...
     deg2rad(5.0) * ones(3, 1)];
-cfg.screenBenchmark.outputSubfolder = 'lqr_screen_balanced_v2';
+cfg.screenBenchmark.outputSubfolder = 'lqr_screen_realized_coverage_v3';
 cfg.screenBenchmark.provisionalLqrPath = fullfile('results', cfg.name, ...
-    cfg.retune.outputSubfolder, 'selected_lqr.mat');
+    cfg.retune.selectionRevalidationOutputSubfolder, 'selected_lqr.mat');
 cfg.screenBenchmark.lqrStatus = ...
-    'retuned_targeted_baseline_pending_confirmation';
+    'selection_revalidated_v6_pending_weakness_screen';
 
 % The retune stage uses independent validation banks. The values below are
 % runtime anchors, not the final study grid.

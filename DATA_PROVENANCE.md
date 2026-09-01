@@ -49,6 +49,12 @@ is not frozen directly. The v6 finalization workflow reuses only the clean
 250-candidate design ranking and rebuilds the complete selection bank after
 adding explicit reference/X0 state-bound gates.
 
+The weakness-screen workflow uses fresh seed `300830201` and 20 replicates in
+each of the 135 family/disturbance/uncertainty cells, totaling 2,700 episodes.
+It does not reuse either LQR model-selection bank and does not open OOD/test
+data. Its output is diagnostic LQR-only evidence; no NMPC teacher outcome is
+used to select a weak context at this stage.
+
 ## Strong-LQR selection artifact
 
 The manual LQR workflow rebuilds independent design and selection banks from

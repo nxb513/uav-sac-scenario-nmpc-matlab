@@ -11,6 +11,7 @@ The public package contains only:
 - the approved speed/load-stratified reference sampler and bank builder;
 - the full 250-candidate strong-LQR retune runner;
 - the state-bound-gated top-five LQR selection-finalization workflow;
+- the fresh 2,700-episode LQR-only weakness-screen runners and workflow;
 - manual GitHub Actions workflows for contract validation, probes and the
   staged checkpoint stream;
 - the original and corrected nominal reference-feasibility CSV/MAT artifacts

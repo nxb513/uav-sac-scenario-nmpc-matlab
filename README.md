@@ -66,6 +66,13 @@ artifact is available. This inexpensive stage rebuilds only the corrected
 prevents a reference outside the declared state workspace from influencing the
 final LQR while avoiding an unnecessary repeat of the clean design phase.
 
+After v6 succeeds, run `MATLAB screen targeted LQR weakness` with the v6 run
+ID. It builds a fresh 2,700-episode bank from seed `300830201`, runs only the
+frozen LQR for 200 steps per episode, and saves full traces plus global,
+per-family and per-speed/load summaries. The reported 5/10/20-step prevalence
+grid is diagnostic; final divergence thresholds are selected afterward and
+are never tuned on OOD/test data.
+
 1. Keep this repository public.
 2. Open **Actions > MATLAB retune strong targeted LQR** and dispatch it.
 3. Download and review the `lqr-retune-realized-coverage-v5-*` artifact.
