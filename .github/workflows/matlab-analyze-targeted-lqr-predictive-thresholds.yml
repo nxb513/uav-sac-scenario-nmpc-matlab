@@ -17,8 +17,6 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
-      LQR_BANK_ROOT: ${{ github.workspace }}/source_artifact/results/targeted_lqr_weak_rebuild_v1/validation_bank_realized_coverage_v3
-      LQR_SCREEN_ROOT: ${{ github.workspace }}/source_artifact/results/targeted_lqr_weak_rebuild_v1/lqr_screen_realized_coverage_v3
       LQR_ANALYSIS_OUTPUT_ROOT: ${{ github.workspace }}/results/targeted_lqr_weak_rebuild_v1/lqr_predictive_threshold_analysis_v1
     steps:
       - name: Check out public research package
@@ -33,6 +31,16 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.source_run_id }}
+
+      - name: Locate downloaded bank and screen roots
+        shell: bash
+        run: |
+          bank_path="$(find source_artifact -type f -name validation_bank.mat -print -quit)"
+          screen_path="$(find source_artifact -type f -name lqr_validation_screen.mat -print -quit)"
+          test -n "$bank_path"
+          test -n "$screen_path"
+          echo "LQR_BANK_ROOT=$(dirname "$bank_path")" >> "$GITHUB_ENV"
+          echo "LQR_SCREEN_ROOT=$(dirname "$screen_path")" >> "$GITHUB_ENV"
 
       - name: Set up MATLAB and required products
         uses: matlab-actions/setup-matlab@v3
