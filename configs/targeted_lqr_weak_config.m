@@ -67,6 +67,8 @@ cfg.uncertainty.stratumNames = {'low', 'medium', 'high'};
 cfg.uncertainty.stratumXiMagnitude = [0, 1/3; 1/3, 2/3; 2/3, 1];
 
 cfg.retune.outputSubfolder = 'lqr_retune_realized_coverage_v5';
+cfg.retune.selectionRevalidationOutputSubfolder = ...
+    'lqr_retune_realized_coverage_v6';
 cfg.screenBenchmark.replicatesPerCell = 20;
 cfg.screenBenchmark.episodeCount = 2700;
 cfg.screenBenchmark.seed = 300830201;

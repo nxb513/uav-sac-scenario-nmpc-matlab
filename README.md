@@ -60,6 +60,12 @@ Do not dispatch the SAC checkpoint stream until this LQR is frozen, the fresh
 2,700-episode weakness screen is complete, the 20-step divergence thresholds
 are approved, and a replacement context artifact is added.
 
+Run `MATLAB finalize targeted LQR selection` after the 250-candidate design
+artifact is available. This inexpensive stage rebuilds only the corrected
+1,350-episode selection bank and re-evaluates the frozen design top five. It
+prevents a reference outside the declared state workspace from influencing the
+final LQR while avoiding an unnecessary repeat of the clean design phase.
+
 1. Keep this repository public.
 2. Open **Actions > MATLAB retune strong targeted LQR** and dispatch it.
 3. Download and review the `lqr-retune-realized-coverage-v5-*` artifact.

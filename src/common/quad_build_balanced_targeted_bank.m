@@ -11,6 +11,7 @@ validateattributes(replicatesPerCell, {'numeric'}, ...
 previousRng = rng;
 cleanup = onCleanup(@() rng(previousRng));
 rng(seed, 'twister');
+nmpcCfg = step2_nmpc_config();
 
 conditions = disturbance_conditions(cfg.retune.disturbanceLevels);
 familyCount = numel(cfg.reference.families);
@@ -70,7 +71,7 @@ for episodeIndex = 1:episodeCount
     spec = specifications(episodeIndex);
     family = cfg.reference.families{spec.FamilyIndex};
     [options, reference, feedforward, metric] = accepted_reference( ...
-        family, spec.TargetSpeed, spec.TargetAcceleration, cfg);
+        family, spec.TargetSpeed, spec.TargetAcceleration, cfg, nmpcCfg);
     thetaPlant = quad_apply_uncertainty(cfg.plant.nominal, spec.Xi, rho);
     thetaPlant.inputLimits = cfg.plant.nominal.inputLimits;
     disturbanceType = char(conditions.Type(spec.ConditionIndex));
@@ -79,7 +80,9 @@ for episodeIndex = 1:episodeCount
     disturbance = quad_generate_disturbance_episode(cfg.plant, ...
         disturbanceCfg, disturbanceType, cfg.retune.disturbanceDomain, ...
         disturbanceLevel, cfg.sampleTime, cfg.stepCount, disturbanceSeed);
-    x0 = reference(:, 1) + cfg.retune.initialStateStd .* randn(12, 1);
+    x0 = accepted_initial_state(reference(:, 1), ...
+        cfg.retune.initialStateStd, nmpcCfg, ...
+        cfg.reference.maxSampleAttempts);
 
     bank(episodeIndex).EpisodeIndex = episodeIndex;
     bank(episodeIndex).CellId = sprintf('F%d_D%d_U%d', ...
@@ -118,6 +121,9 @@ for episodeIndex = 1:episodeCount
     row.PeakReferenceAcceleration = metric.peakAcceleration;
     row.PeakReferenceTiltDeg = metric.peakTiltDeg;
     row.PeakFeedforwardFraction = metric.peakFeedforwardFraction;
+    row.ReferenceStateBoundViolation = metric.stateBoundViolation;
+    row.InitialStateBoundViolation = max([0; ...
+        nmpc_state_bound_violations([x0, x0], nmpcCfg)]);
     row.MassScale = thetaPlant.m / cfg.plant.nominal.m;
     row.MinimumInertiaScale = min(diag(thetaPlant.J) ./ ...
         diag(cfg.plant.nominal.J));
@@ -144,14 +150,16 @@ conditions = table(types, level, 'VariableNames', {'Type', 'Level'});
 end
 
 function [options, reference, feedforward, metric] = ...
-        accepted_reference(family, targetSpeed, targetAcceleration, cfg)
+        accepted_reference(family, targetSpeed, targetAcceleration, cfg, ...
+        nmpcCfg)
 for attempt = 1:cfg.reference.maxSampleAttempts
     options = quad_sample_targeted_reference_options(family, cfg.reference, ...
         targetSpeed, targetAcceleration);
     [reference, ~, feedforward, flatness] = ...
         quad_targeted_reference_trajectory(family, cfg.sampleTime, ...
         cfg.stepCount + 1, options, cfg.plant.nominal);
-    metric = reference_metric(reference, feedforward, flatness, cfg);
+    metric = reference_metric(reference, feedforward, flatness, cfg, ...
+        nmpcCfg);
     speedRelativeError = abs(metric.peakSpeed - targetSpeed) / targetSpeed;
     accelerationRelativeError = abs(metric.peakAcceleration - ...
         targetAcceleration) / targetAcceleration;
@@ -164,7 +172,8 @@ for attempt = 1:cfg.reference.maxSampleAttempts
             metric.peakAcceleration <= cfg.reference.peakAccelerationRange(2) && ...
             metric.peakTiltDeg <= cfg.reference.maxEquivalentTiltDeg && ...
             metric.peakFeedforwardFraction <= ...
-            cfg.reference.maxFeedforwardInputFraction
+            cfg.reference.maxFeedforwardInputFraction && ...
+            metric.stateBoundViolation <= 1e-8
         return;
     end
 end
@@ -174,7 +183,21 @@ error('quad_build_balanced_targeted_bank:SamplingFailed', ...
     family, targetSpeed, targetAcceleration);
 end
 
-function metric = reference_metric(reference, feedforward, flatness, cfg)
+function x0 = accepted_initial_state(referenceState, standardDeviation, ...
+        nmpcCfg, maximumAttempts)
+for attempt = 1:maximumAttempts
+    x0 = referenceState + standardDeviation .* randn(12, 1);
+    violation = nmpc_state_bound_violations([x0, x0], nmpcCfg);
+    if isempty(violation) || max(violation) <= 1e-8
+        return;
+    end
+end
+error('quad_build_balanced_targeted_bank:InitialStateSamplingFailed', ...
+    'Could not sample an initial state inside the declared bounds.');
+end
+
+function metric = reference_metric(reference, feedforward, flatness, cfg, ...
+        nmpcCfg)
 metric.peakSpeed = max(vecnorm(reference(7:9, :), 2, 1));
 metric.peakAcceleration = max(vecnorm(flatness.acceleration, 2, 1));
 metric.peakTiltDeg = max(rad2deg(flatness.tilt));
@@ -182,6 +205,8 @@ thrustFraction = feedforward(1, :) ./ cfg.plant.nominal.inputLimits.T(2);
 torqueLimits = max(abs(cfg.plant.nominal.inputLimits.tau), [], 2);
 torqueFraction = abs(feedforward(2:4, :)) ./ torqueLimits;
 metric.peakFeedforwardFraction = max([thrustFraction(:); torqueFraction(:)]);
+metric.stateBoundViolation = max([0; ...
+    nmpc_state_bound_violations(reference, nmpcCfg)]);
 end
 
 function value = empty_specification()
@@ -232,6 +257,8 @@ value.PeakReferenceSpeed = NaN;
 value.PeakReferenceAcceleration = NaN;
 value.PeakReferenceTiltDeg = NaN;
 value.PeakFeedforwardFraction = NaN;
+value.ReferenceStateBoundViolation = NaN;
+value.InitialStateBoundViolation = NaN;
 value.MassScale = NaN;
 value.MinimumInertiaScale = NaN;
 value.MinimumEffectiveness = NaN;
@@ -268,4 +295,8 @@ assert(all(speedError <= cfg.reference.speedRelativeTolerance + eps), ...
 assert(all(accelerationError <= ...
     cfg.reference.accelerationRelativeTolerance + eps), ...
     'Bank contains references outside the realized-acceleration tolerance.');
+assert(all(manifest.ReferenceStateBoundViolation <= 1e-8), ...
+    'Bank contains references outside the declared state bounds.');
+assert(all(manifest.InitialStateBoundViolation <= 1e-8), ...
+    'Bank contains initial states outside the declared state bounds.');
 end

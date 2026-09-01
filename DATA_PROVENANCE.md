@@ -42,6 +42,13 @@ provenance. It was computationally complete but selected some lemniscate rows
 by target-speed labels rather than realized speed, and its low-speed load
 labels were not dynamically distinct. It must not be used downstream.
 
+The v5 design bank from run `33495255190` passes realized speed/load coverage
+and contains no reference or initial-state bound violation. Its selection bank
+contains one vertical-circle reference above the altitude bound and therefore
+is not frozen directly. The v6 finalization workflow reuses only the clean
+250-candidate design ranking and rebuilds the complete selection bank after
+adding explicit reference/X0 state-bound gates.
+
 ## Strong-LQR selection artifact
 
 The manual LQR workflow rebuilds independent design and selection banks from

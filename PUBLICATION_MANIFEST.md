@@ -10,6 +10,7 @@ The public package contains only:
 - the five-family reference-feasibility screen and contract tests;
 - the approved speed/load-stratified reference sampler and bank builder;
 - the full 250-candidate strong-LQR retune runner;
+- the state-bound-gated top-five LQR selection-finalization workflow;
 - manual GitHub Actions workflows for contract validation, probes and the
   staged checkpoint stream;
 - the original and corrected nominal reference-feasibility CSV/MAT artifacts

@@ -1,0 +1,56 @@
+name: MATLAB finalize targeted LQR selection
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful v5 run containing the 250-candidate design ranking
+        required: true
+        default: "33495255190"
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  finalize-selection:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      LQR_SELECTION_SOURCE_ROOT: ${{ github.workspace }}/source_lqr
+      LQR_SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+    steps:
+      - name: Check out public research package
+        uses: actions/checkout@v6
+
+      - name: Download v5 design artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: lqr-retune-realized-coverage-v5-${{ inputs.source_run_id }}
+          path: source_lqr
+          merge-multiple: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Set up MATLAB and required products
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: Control_System_Toolbox Parallel_Computing_Toolbox Statistics_and_Machine_Learning_Toolbox
+          cache: true
+
+      - name: Revalidate top five on corrected selection bank
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); retune_targeted_lqr_baseline
+
+      - name: Upload frozen v6 LQR artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lqr-retune-realized-coverage-v6-${{ github.run_id }}
+          path: results/targeted_lqr_weak_rebuild_v1/lqr_retune_realized_coverage_v6/
+          if-no-files-found: warn
+          retention-days: 14
