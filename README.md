@@ -49,8 +49,9 @@ is not silently imposed on other experiments.
 
 The obsolete low-speed context bank has been removed. First run **MATLAB
 retune strong targeted LQR**. It evaluates the approved full 250-candidate
-search on independent 1,350-episode design and selection banks using three
-workers. Its output is stored as
+search on independent 1,350-episode design and selection banks using up to
+three workers. The runner records the requested and actual worker counts and
+automatically respects the GitHub host limit. Its output is stored as
 `lqr-retune-speed-envelope-v4-<run-id>` for 14 days.
 
 Do not dispatch the SAC checkpoint stream until this LQR is frozen, the fresh
