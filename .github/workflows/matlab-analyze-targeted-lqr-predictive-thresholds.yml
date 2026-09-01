@@ -1,0 +1,56 @@
+name: MATLAB analyze targeted LQR predictive thresholds
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful weakness-screen run containing bank and traces
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  analyze-predictive-thresholds:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      LQR_BANK_ROOT: ${{ github.workspace }}/source_artifact/results/targeted_lqr_weak_rebuild_v1/validation_bank_realized_coverage_v3
+      LQR_SCREEN_ROOT: ${{ github.workspace }}/source_artifact/results/targeted_lqr_weak_rebuild_v1/lqr_screen_realized_coverage_v3
+      LQR_ANALYSIS_OUTPUT_ROOT: ${{ github.workspace }}/results/targeted_lqr_weak_rebuild_v1/lqr_predictive_threshold_analysis_v1
+    steps:
+      - name: Check out public research package
+        uses: actions/checkout@v6
+
+      - name: Download frozen LQR weakness-screen artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: lqr-weakness-screen-realized-coverage-v3-${{ inputs.source_run_id }}
+          path: source_artifact
+          merge-multiple: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Set up MATLAB and required products
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: Control_System_Toolbox Statistics_and_Machine_Learning_Toolbox
+          cache: true
+
+      - name: Analyze H20 predictive threshold grid
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); analyze_targeted_lqr_predictive_thresholds
+
+      - name: Upload predictive-threshold analysis
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lqr-predictive-threshold-analysis-v1-${{ github.run_id }}
+          path: results/targeted_lqr_weak_rebuild_v1/lqr_predictive_threshold_analysis_v1/
+          if-no-files-found: warn
+          retention-days: 14

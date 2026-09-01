@@ -1,0 +1,8 @@
+task=analyze_targeted_lqr_predictive_thresholds
+status=completed_diagnostic_thresholds_not_locked
+episodes=2700
+candidate_steps=477900
+threshold_candidates=384
+hard_episodes=13
+wall_seconds=61.743839
+
