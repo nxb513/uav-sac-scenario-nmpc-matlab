@@ -14,19 +14,33 @@ The repository contains no account token, license material, user directory,
 paper PDF, manuscript, surrogate dataset, OOD confirmation data or prior
 controller result.
 
-## Nominal reference-feasibility artifact
+## Nominal reference-feasibility artifacts
 
 `results/targeted_lqr_weak_rebuild_v1/reference_feasibility_v1/` contains the
-120-case nominal screen over five trajectory families, eight speed anchors and
-three acceleration targets. It includes no hidden test/OOD realization and is
-not a closed-loop performance result. `SHA256SUMS.txt` binds the CSV, MAT,
-report and completion marker included in the repository.
+first 120-case nominal screen. It is superseded because its low-speed load
+labels were not dynamically distinct and its randomized bank did not enforce
+realized-speed tolerance.
+
+`results/targeted_lqr_weak_rebuild_v1/reference_feasibility_v2_realized_coverage/`
+is the active 120-case screen. All 120 rows pass the physical and robust-train
+reference gates. Maximum realized speed/acceleration errors are approximately
+`0.27%/18.37%` in this deterministic screen. Both artifact directories include
+SHA-256 manifests; neither contains hidden test/OOD realizations or closed-loop
+performance results.
 
 The subsequently approved bank sampler uses the same eight speed anchors and
-three acceleration targets, with geometry jitter and deterministic
-within-cell stratification. Contract tests rebuild a 1,350-episode manifest in
-memory and verify all eight speeds and all three load targets in each of the
-135 factorial cells.
+three speed-feasible load levels, with geometry jitter and deterministic
+within-cell stratification. At `0.5-1 m/s`, the load accelerations are reduced
+according to `v^2/Rmin`; from `2 m/s` upward, the full `{2,5,9} m/s^2` targets
+apply, except for a vertical-circle workspace floor. Contract tests rebuild a
+1,350-episode manifest in memory and verify all eight speeds, all three load
+levels, realized-speed tolerance and realized-acceleration tolerance in each
+of the 135 factorial cells.
+
+The v4 GitHub artifact from run `33472674604` is retained only as audit
+provenance. It was computationally complete but selected some lemniscate rows
+by target-speed labels rather than realized speed, and its low-speed load
+labels were not dynamically distinct. It must not be used downstream.
 
 ## Strong-LQR selection artifact
 

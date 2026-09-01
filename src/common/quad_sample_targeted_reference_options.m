@@ -36,9 +36,6 @@ switch family
     case 'vertical_circle'
         effectiveAcceleration = min(targetAcceleration, ...
             cfg.verticalAccelerationFractionLimit * 9.81);
-        if targetPeakSpeed >= 10 && effectiveAcceleration < 5
-            effectiveAcceleration = 5;
-        end
         radius = max(cfg.minimumGeometryScale, ...
             targetPeakSpeed ^ 2 / effectiveAcceleration) * ...
             geometryJitter;

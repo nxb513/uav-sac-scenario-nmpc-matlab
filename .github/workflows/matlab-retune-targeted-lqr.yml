@@ -30,7 +30,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: lqr-retune-speed-envelope-v4-${{ github.run_id }}
-          path: results/targeted_lqr_weak_rebuild_v1/lqr_retune_speed_envelope_v4/
+          name: lqr-retune-realized-coverage-v5-${{ github.run_id }}
+          path: results/targeted_lqr_weak_rebuild_v1/lqr_retune_realized_coverage_v5/
           if-no-files-found: warn
           retention-days: 14

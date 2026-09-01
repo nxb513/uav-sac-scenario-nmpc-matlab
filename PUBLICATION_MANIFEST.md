@@ -12,7 +12,8 @@ The public package contains only:
 - the full 250-candidate strong-LQR retune runner;
 - manual GitHub Actions workflows for contract validation, probes and the
   staged checkpoint stream;
-- the nominal reference-feasibility CSV/MAT artifact and report;
+- the original and corrected nominal reference-feasibility CSV/MAT artifacts
+  and reports, with the original explicitly marked superseded;
 - documentation and repository metadata.
 
 Explicitly excluded:

@@ -7,7 +7,7 @@ function cfg = targeted_lqr_weak_config()
 plant = step1_plant_config();
 
 cfg.name = 'targeted_lqr_weak_rebuild_v1';
-cfg.status = 'speed_envelope_approved_lqr_retune_authorized';
+cfg.status = 'realized_speed_load_coverage_lqr_rerun_authorized';
 cfg.resultRoot = fullfile('results', cfg.name);
 cfg.sampleTime = 0.05;
 cfg.stepCount = 200;
@@ -28,7 +28,15 @@ cfg.reference.approvedIdSpeedAnchors = [0.5, 1, 2, 4, 6, 8, 10, 12];
 cfg.reference.candidateOodSpeedAnchors = [14, 16];
 cfg.reference.approvedLoadNames = {'mild', 'moderate', 'hard'};
 cfg.reference.approvedAccelerationTargets = [2.0, 5.0, 9.0];
+cfg.reference.approvedLoadFractions = ...
+    cfg.reference.approvedAccelerationTargets ./ ...
+    max(cfg.reference.approvedAccelerationTargets);
+cfg.reference.loadAccelerationRule = ...
+    'speed_feasible_fraction_of_full_envelope_target';
+cfg.reference.minimumResolvedAcceleration = 0.20;
+cfg.reference.accelerationRelativeTolerance = 0.25;
 cfg.reference.verticalAccelerationFractionLimit = 0.75;
+cfg.reference.verticalCircleMaximumRadius = 45.0;
 cfg.reference.minimumGeometryScale = 0.30;
 cfg.reference.geometryScaleJitter = [0.90, 1.10];
 cfg.reference.speedRelativeTolerance = 0.03;
@@ -39,7 +47,7 @@ cfg.reference.robustCandidateMaxInputFraction = 0.75;
 cfg.reference.dynamicResidualP95Limit = 0.25;
 cfg.reference.targetPeakSpeedRange = [0.50, 12.00];
 cfg.reference.preferredHardSpeedRange = [8.00, 12.00];
-cfg.reference.peakAccelerationRange = [0.20, 10.50];
+cfg.reference.peakAccelerationRange = [0.15, 10.50];
 cfg.reference.altitudeRange = [1.00, 3.00];
 cfg.reference.maxEquivalentTiltDeg = ...
     cfg.reference.robustCandidateMaxTiltDeg;
@@ -58,7 +66,7 @@ cfg.uncertainty.targeted.rho = [0.18; ...
 cfg.uncertainty.stratumNames = {'low', 'medium', 'high'};
 cfg.uncertainty.stratumXiMagnitude = [0, 1/3; 1/3, 2/3; 2/3, 1];
 
-cfg.retune.outputSubfolder = 'lqr_retune_speed_envelope_v4';
+cfg.retune.outputSubfolder = 'lqr_retune_realized_coverage_v5';
 cfg.screenBenchmark.replicatesPerCell = 20;
 cfg.screenBenchmark.episodeCount = 2700;
 cfg.screenBenchmark.seed = 300830201;

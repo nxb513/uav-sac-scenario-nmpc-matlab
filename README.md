@@ -29,10 +29,12 @@ subject to review.
 The in-distribution speed anchors are
 `{0.5,1,2,4,6,8,10,12} m/s` for circle, lemniscate, vertical circle,
 spatial helix and smooth waypoints. Geometry is scaled using the approved
-acceleration targets `{2,5,9} m/s^2`; speed is not increased while keeping an
-infeasibly small radius fixed. Every 10-replicate factorial cell is stratified
-to contain all eight speed anchors and all three load targets. The candidate
-OOD anchors `{14,16} m/s` remain locked.
+speed-feasible load levels. At `0.5 m/s`, the resolved targets are approximately
+`{0.20,0.46,0.83} m/s^2`; at `1 m/s` they are
+`{0.74,1.85,3.33} m/s^2`; from `2 m/s` upward the full `{2,5,9} m/s^2`
+targets apply, subject to the vertical-circle workspace limit. Every generated
+reference must meet the realized-speed and realized-acceleration tolerances.
+The candidate OOD anchors `{14,16} m/s` remain locked.
 
 ## Solver guard
 
@@ -52,7 +54,7 @@ retune strong targeted LQR**. It evaluates the approved full 250-candidate
 search on independent 1,350-episode design and selection banks using up to
 three workers. The runner records the requested and actual worker counts and
 automatically respects the GitHub host limit. Its output is stored as
-`lqr-retune-speed-envelope-v4-<run-id>` for 14 days.
+`lqr-retune-realized-coverage-v5-<run-id>` for 14 days.
 
 Do not dispatch the SAC checkpoint stream until this LQR is frozen, the fresh
 2,700-episode weakness screen is complete, the 20-step divergence thresholds
@@ -60,7 +62,7 @@ are approved, and a replacement context artifact is added.
 
 1. Keep this repository public.
 2. Open **Actions > MATLAB retune strong targeted LQR** and dispatch it.
-3. Download and review the `lqr-retune-speed-envelope-v4-*` artifact.
+3. Download and review the `lqr-retune-realized-coverage-v5-*` artifact.
 4. After all downstream gates above are complete, open **Actions > MATLAB
    SAC-NMPC checkpoint stream**.
 5. For a fresh SAC run, select `fresh_start=true`. For a resume, enter the prior
@@ -81,7 +83,7 @@ license file, batch token, MATLAB Compiler, or MATLAB Coder is included.
 The LQR retune writes:
 
 ```text
-results/targeted_lqr_weak_rebuild_v1/lqr_retune_speed_envelope_v4/
+results/targeted_lqr_weak_rebuild_v1/lqr_retune_realized_coverage_v5/
 ```
 
 It contains the two reproducible bank manifests, all candidate metrics,
