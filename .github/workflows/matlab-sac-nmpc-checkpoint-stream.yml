@@ -59,7 +59,7 @@ jobs:
           products: Reinforcement_Learning_Toolbox Deep_Learning_Toolbox Optimization_Toolbox Parallel_Computing_Toolbox Control_System_Toolbox
           cache: true
 
-      - name: Train continuously with 10-episode checkpoints
+      - name: Train continuously with 50-episode checkpoints
         timeout-minutes: 330
         uses: matlab-actions/run-command@v3
         with:

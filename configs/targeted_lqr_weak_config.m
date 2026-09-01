@@ -7,7 +7,7 @@ function cfg = targeted_lqr_weak_config()
 plant = step1_plant_config();
 
 cfg.name = 'targeted_lqr_weak_rebuild_v1';
-cfg.status = 'candidate_requires_benchmark_and_user_approval';
+cfg.status = 'speed_envelope_approved_lqr_bank_pending';
 cfg.resultRoot = fullfile('results', cfg.name);
 cfg.sampleTime = 0.05;
 cfg.stepCount = 200;
@@ -24,18 +24,27 @@ cfg.reference.seed = 300830101;
 cfg.reference.benchmarkCountPerFamily = 50;
 cfg.reference.families = {'circle', 'lemniscate', 'vertical_circle', ...
     'spatial_helix', 'smooth_waypoints'};
-cfg.reference.targetPeakSpeedRange = [0.60, 2.00];
-cfg.reference.preferredHardSpeedRange = [1.00, 2.00];
-cfg.reference.peakAccelerationRange = [0.80, 6.00];
-cfg.reference.circleRadiusRange = [0.30, 0.90];
-cfg.reference.verticalCircleRadiusRange = [0.30, 0.70];
-cfg.reference.lemniscateAmplitudeXRange = [0.40, 0.90];
-cfg.reference.lemniscateAmplitudeYRange = [0.25, 0.60];
-cfg.reference.helixRadiusRange = [0.35, 0.80];
-cfg.reference.helixVerticalAmplitudeRange = [0.15, 0.40];
-cfg.reference.altitudeRange = [0.80, 1.30];
-cfg.reference.maxEquivalentTiltDeg = 35.0;
-cfg.reference.maxFeedforwardInputFraction = 1.0;
+cfg.reference.approvedIdSpeedAnchors = [0.5, 1, 2, 4, 6, 8, 10, 12];
+cfg.reference.candidateOodSpeedAnchors = [14, 16];
+cfg.reference.approvedLoadNames = {'mild', 'moderate', 'hard'};
+cfg.reference.approvedAccelerationTargets = [2.0, 5.0, 9.0];
+cfg.reference.verticalAccelerationFractionLimit = 0.75;
+cfg.reference.minimumGeometryScale = 0.30;
+cfg.reference.geometryScaleJitter = [0.90, 1.10];
+cfg.reference.speedRelativeTolerance = 0.03;
+cfg.reference.physicalMaxTiltDeg = 70.0;
+cfg.reference.physicalMaxInputFraction = 1.0;
+cfg.reference.robustCandidateMaxTiltDeg = 50.0;
+cfg.reference.robustCandidateMaxInputFraction = 0.75;
+cfg.reference.dynamicResidualP95Limit = 0.25;
+cfg.reference.targetPeakSpeedRange = [0.50, 12.00];
+cfg.reference.preferredHardSpeedRange = [8.00, 12.00];
+cfg.reference.peakAccelerationRange = [0.20, 10.50];
+cfg.reference.altitudeRange = [1.00, 3.00];
+cfg.reference.maxEquivalentTiltDeg = ...
+    cfg.reference.robustCandidateMaxTiltDeg;
+cfg.reference.maxFeedforwardInputFraction = ...
+    cfg.reference.robustCandidateMaxInputFraction;
 cfg.reference.maxSampleAttempts = 200;
 
 % Large but in-distribution specialist envelope. The legacy OOD envelope is

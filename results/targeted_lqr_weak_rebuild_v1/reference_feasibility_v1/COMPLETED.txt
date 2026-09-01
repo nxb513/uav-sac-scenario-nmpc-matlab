@@ -1,0 +1,6 @@
+task=run_targeted_reference_feasibility
+completed_at=2026-08-31 21:55:54.995+07:00
+case_count=120
+wall_seconds=0.502947
+figures=false
+training_grid_locked=false

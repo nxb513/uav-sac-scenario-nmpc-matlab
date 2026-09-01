@@ -3,8 +3,10 @@ function cfg = targeted_specialist_sac_config()
 
 targeted = targeted_lqr_weak_config();
 cfg.name = 'targeted_specialist_sac_v1';
-cfg.status = 'official_200_step_checkpoint_stream_final_budget_not_locked';
+cfg.status = ...
+    'predictive_20step_context_thresholds_pending_user_approval';
 cfg.targeted = targeted;
+cfg.divergence = targeted_lqr_divergence_config();
 cfg.trainingBankPath = fullfile(targeted.resultRoot, ...
     targeted.specialistBank.outputSubfolder, ...
     'training_local_context_bank.mat');
@@ -68,11 +70,11 @@ cfg.agent.numWarmStartSteps = 256;
 cfg.agent.targetSmoothFactor = 0.005;
 
 cfg.training.finalBudgetLocked = false;
-cfg.training.candidateTransitionCeiling = 300000;
-cfg.training.candidateCheckpoints = [50000, 100000, 150000, 225000, 300000];
-cfg.training.transitionBudget = NaN;
-cfg.training.cumulativeCheckpoints = [];
-cfg.training.segmentSteps = [];
+cfg.training.budgetUnit = 'episode';
+cfg.training.candidateEpisodeCeiling = 1500;
+cfg.training.checkpointFrequencyEpisodes = 50;
+cfg.training.candidateEvaluationEpisodes = [250, 500, 750, 1000, ...
+    1250, 1500];
 cfg.training.maxEpisodes = 1000000;
 cfg.training.maxStepsPerEpisode = cfg.environment.stepsPerEpisode;
 cfg.training.scoreAveragingWindowLength = 20;
@@ -80,9 +82,9 @@ cfg.training.parallelMode = 'sync';
 cfg.training.workerCount = 3;
 cfg.training.workerRandomSeeds = [300831601, 300831602, 300831603];
 
-cfg.probe.transitionCount = 100;
-cfg.probe.serialRunId = 'actual_sac_serial_100_v1';
-cfg.probe.parallelRunId = 'actual_sac_sync3_100_v1';
+cfg.probe.episodeCount = 3;
+cfg.probe.serialRunId = 'actual_sac_serial_episode_probe_v1';
+cfg.probe.parallelRunId = 'actual_sac_sync3_episode_probe_v1';
 cfg.probe.forceCurriculumStage = 4;
 cfg.probe.contextsPerFactorialCell = 1;
 cfg.logging.enabled = true;
