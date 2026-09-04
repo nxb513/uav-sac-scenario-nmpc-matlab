@@ -4,7 +4,7 @@ function cfg = targeted_specialist_sac_config()
 targeted = targeted_lqr_weak_config();
 cfg.name = 'targeted_specialist_sac_v1';
 cfg.status = ...
-    'predictive_20step_context_thresholds_pending_user_approval';
+    'c012_locked_context_bank_required_before_training';
 cfg.targeted = targeted;
 cfg.divergence = targeted_lqr_divergence_config();
 cfg.trainingBankPath = fullfile(targeted.resultRoot, ...
@@ -32,6 +32,12 @@ cfg.environment.terminateCosPitchMargin = 0.15;
 cfg.environment.maxAbsolutePosition = 20.0;
 cfg.environment.forceCurriculumStage = 0;
 cfg.environment.curriculumTransitionFractions = [0.15, 0.35, 0.65];
+cfg.environment.curriculumStageNames = { ...
+    'parametric_uncertainty_no_disturbance', ...
+    'parametric_uncertainty_light_disturbance', ...
+    'gust_and_time_varying_disturbance', ...
+    'diverse_reference_hard_contexts_only'};
+cfg.environment.growthOnlyAuxiliaryStages = [true, true, true, false];
 cfg.environment.horizonBank = [5, 10, 15, 20];
 cfg.environment.controlHorizonBank = [2, 5, 10, 15, 20];
 cfg.environment.scenarioCountBank = 5;
@@ -86,6 +92,7 @@ cfg.probe.episodeCount = 3;
 cfg.probe.serialRunId = 'actual_sac_serial_episode_probe_v1';
 cfg.probe.parallelRunId = 'actual_sac_sync3_episode_probe_v1';
 cfg.probe.forceCurriculumStage = 4;
-cfg.probe.contextsPerFactorialCell = 1;
+cfg.probe.maximumContextsPerPositiveFactorialCell = ...
+    targeted.specialistBank.maximumHardContextsPerCell;
 cfg.logging.enabled = true;
 end

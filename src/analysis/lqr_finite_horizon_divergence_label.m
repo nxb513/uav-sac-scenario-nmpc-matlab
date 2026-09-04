@@ -41,20 +41,17 @@ warningCross = max(normalized(:, 2:end), [], 'all') >= ...
 sustainedGrowth = growthFactor >= cfg.growth.factor && ...
     growthRun >= cfg.growth.minimumConsecutiveSteps && warningCross;
 
-if alreadyOutsideEnvelope
-    firstEvent = 0;
-else
-    eventMask = absoluteCross | safetyCross;
-    firstEvent = find(eventMask, 1, 'first');
-    if isempty(firstEvent) && sustainedGrowth
-        firstEvent = H;
-    end
-end
-isDivergence = ~isempty(firstEvent);
-if isDivergence
-    timeToEvent = firstEvent;
+eventMask = absoluteCross | safetyCross;
+firstHardEvent = find(eventMask, 1, 'first');
+hardEvent = ~alreadyOutsideEnvelope && ~isempty(firstHardEvent);
+growthOnly = ~alreadyOutsideEnvelope && isempty(firstHardEvent) && ...
+    sustainedGrowth;
+if hardEvent
+    timeToEvent = firstHardEvent;
+    hardEventOffset = firstHardEvent;
 else
     timeToEvent = Inf;
+    hardEventOffset = [];
 end
 
 finiteSeverity = normalized(:, 2:end);
@@ -77,13 +74,16 @@ actuatorMargin = minimum_actuator_margin( ...
     rawU(:, inputIndices), nmpcCfg.plant.nominal);
 
 label = struct();
-label.CounterfactualDivergence = isDivergence;
+label.CounterfactualDivergence = hardEvent;
+label.HardEvent = hardEvent;
+label.GrowthOnly = growthOnly;
 label.AlreadyOutsideEnvelope = alreadyOutsideEnvelope;
-label.PreDivergenceEligible = isDivergence && ...
+label.PreDivergenceEligible = hardEvent && ...
     timeToEvent >= cfg.selection.minimumLeadSteps && ...
     timeToEvent <= H;
+label.GrowthOnlyEligible = growthOnly;
 label.TimeToEventSteps = timeToEvent;
-label.EventStep = event_step(startStep, firstEvent);
+label.EventStep = event_step(startStep, hardEventOffset);
 label.RiskScore = riskScore;
 label.LogEnergyGrowthPerStep = log_growth(energy(1), energy(end), H, ...
     cfg.growth.energyFloor);

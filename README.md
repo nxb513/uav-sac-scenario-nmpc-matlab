@@ -19,8 +19,9 @@ subject to review.
   environment workers.
 - Episode: at most 200 control steps at `Ts=0.05 s`.
 - Checkpoint: exact-resume artifact every 50 episodes.
-- Contexts: balanced pre-divergence LQR contexts after their thresholds and
-  revised reference bank have been approved.
+- Contexts: the locked C012 hard-event rule uses `H=20`, position `0.10 m`,
+  attitude `5 deg`, velocity `0.30 m/s`, body rate `2 rad/s`, growth factor
+  `2`, and five consecutive growth steps. Growth-only remains auxiliary.
 - Disturbance and parametric uncertainty are both active in the context bank.
 - NMPC solve time has zero reward weight.
 
@@ -49,16 +50,19 @@ is not silently imposed on other experiments.
 
 ## Run on GitHub Actions
 
-The obsolete low-speed context bank has been removed. First run **MATLAB
-retune strong targeted LQR**. It evaluates the approved full 250-candidate
-search on independent 1,350-episode design and selection banks using up to
-three workers. The runner records the requested and actual worker counts and
-automatically respects the GitHub host limit. Its output is stored as
-`lqr-retune-realized-coverage-v5-<run-id>` for 14 days.
+The obsolete low-speed context bank has been removed. Frozen LQR `R_089` and
+its SHA-256 provenance are committed as a small reproducibility input. C012
+was selected only from independent LQR validation run `33501219369`; the SAC
+workflow does not reuse those episodes. Instead, every long SAC job rebuilds
+the teacher-training bank deterministically from seed `300830301`: 2,700
+source episodes over 135 cells, 400 LQR steps per episode, and enough reference
+continuation for a 200-step SAC episode plus `Nmax=20`.
 
-Do not dispatch the SAC checkpoint stream until this LQR is frozen, the fresh
-2,700-episode weakness screen is complete, the 20-step divergence thresholds
-are approved, and a replacement context artifact is added.
+The builder stores hard-event contexts for specialist training, growth-only
+contexts as an explicitly labeled curriculum boundary stratum, and safe
+contexts for audit only. Stages 1-3 may use hard plus growth-only contexts;
+stage 4 uses hard contexts only. Growth-only is never relabeled as a hard
+confidence target.
 
 Run `MATLAB finalize targeted LQR selection` after the 250-candidate design
 artifact is available. This inexpensive stage rebuilds only the corrected
@@ -76,12 +80,13 @@ are never tuned on OOD/test data.
 1. Keep this repository public.
 2. Open **Actions > MATLAB retune strong targeted LQR** and dispatch it.
 3. Download and review the `lqr-retune-realized-coverage-v5-*` artifact.
-4. After all downstream gates above are complete, open **Actions > MATLAB
-   SAC-NMPC checkpoint stream**.
+4. Open **Actions > MATLAB SAC-NMPC checkpoint stream** only after reviewing
+   the locally measured context-bank coverage and the SAC runtime probe.
 5. For a fresh SAC run, select `fresh_start=true`. For a resume, enter the prior
    run ID and select `fresh_start=false`.
 6. Choose the candidate per-solve guard and run the workflow.
-7. Download the `sac-nmpc-checkpoint-stream-*` artifact when the job ends.
+7. The job rebuilds and audits C012 contexts before training. Download the
+   `sac-nmpc-checkpoint-stream-*` artifact when the job ends.
 
 The job uses the official
 [`matlab-actions/setup-matlab@v3`](https://github.com/matlab-actions/setup-matlab)

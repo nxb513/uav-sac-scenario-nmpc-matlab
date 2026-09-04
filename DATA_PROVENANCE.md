@@ -1,12 +1,19 @@
 # Data Provenance
 
-## Training-bank gate
+## Training-bank reconstruction
 
-The obsolete low-speed specialist context bank has been removed. No SAC
-training context bank is published in this revision. A replacement may be
-generated only after the approved `0.5-12 m/s` reference envelope, strong LQR
-and 20-step divergence thresholds have been frozen. The episode checkpoint
-stream therefore is source-only in this revision and must not be dispatched.
+The obsolete low-speed specialist context bank remains removed. The active
+bank is reconstructed rather than committed: seed `300830301` generates 2,700
+independent teacher-training source episodes over 135 factorial cells. Each
+source trace contains 400 LQR steps so a selected intervention state retains a
+200-step SAC continuation and the maximum 20-step prediction horizon.
+
+Candidate C012 was locked using validation seed `300830201`, not the training
+seed. Its hard target is a future absolute-envelope, saturation, state/tilt or
+nonfinite event within 20 steps. Growth-only warnings are saved in a separate
+auxiliary stratum and are not hard-failure labels. The deterministic builder
+is `experiments/build_targeted_c012_context_bank.m`; its audit is
+`experiments/audit_targeted_c012_context_bank.m`.
 
 ## Publication boundary
 
@@ -61,5 +68,9 @@ The manual LQR workflow rebuilds independent design and selection banks from
 seeds `300830801` and `300830901`. It evaluates 125 coarse candidates, 125
 local-refinement candidates and the top five on the independent selection
 bank. This is validation-only model selection; no OOD confirmation realization
-is opened. Generated artifacts are uploaded by GitHub Actions and are not
-committed automatically.
+is opened. The selected `R_089` controller from successful v6 run
+`33500607984` is committed at
+`results/targeted_lqr_weak_rebuild_v1/lqr_retune_realized_coverage_v6/selected_lqr.mat`
+so deterministic context reconstruction does not depend on expiring Actions
+artifacts. Its SHA-256 digest is recorded beside the file; the large design and
+selection banks remain excluded.

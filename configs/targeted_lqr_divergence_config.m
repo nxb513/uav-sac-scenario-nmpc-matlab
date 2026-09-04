@@ -3,25 +3,31 @@ function cfg = targeted_lqr_divergence_config()
 %
 % The 20-step horizon follows the user-defined predictive-intervention
 % hypothesis and matches the maximum NMPC prediction horizon. Numerical
-% thresholds remain candidates until the LQR-only screening audit is reviewed.
+% C012 was selected on the frozen LQR validation bank and approved by the
+% user before construction of the independent teacher-training context bank.
 
 cfg.name = 'targeted_lqr_finite_horizon_divergence_v1';
-cfg.status = 'candidate_thresholds_require_screening_and_user_approval';
-cfg.finalThresholdsLocked = false;
+cfg.status = 'locked_c012_on_lqr_validation_20260904';
+cfg.finalThresholdsLocked = true;
+cfg.lockedCandidateId = 'C012';
 cfg.horizonSteps = 20;
 cfg.horizonSeconds = 1.0;
 cfg.sensitivityHorizonSteps = [5, 10, 20];
 
-cfg.threshold.positionM = 0.15;
-cfg.threshold.attitudeDeg = 10.0;
-cfg.threshold.velocityMps = 0.50;
-cfg.threshold.bodyRateRadps = 1.00;
+cfg.threshold.positionM = 0.10;
+cfg.threshold.attitudeDeg = 5.0;
+cfg.threshold.velocityMps = 0.30;
+cfg.threshold.bodyRateRadps = 2.00;
 cfg.threshold.warningFraction = 0.50;
 
 cfg.growth.energyFloor = 0.25;
-cfg.growth.factor = 1.50;
+cfg.growth.factor = 2.00;
 cfg.growth.minimumRelativeStep = 0.02;
-cfg.growth.minimumConsecutiveSteps = 3;
+cfg.growth.minimumConsecutiveSteps = 5;
+cfg.label.hardTarget = ...
+    'future_absolute_envelope_or_safety_crossing_within_h20';
+cfg.label.growthOnlyRole = ...
+    'separate_auxiliary_boundary_stratum_not_hard_failure';
 
 cfg.candidateGrid.positionM = [0.10, 0.15, 0.20, 0.25];
 cfg.candidateGrid.attitudeDeg = [5, 10, 15, 20];
@@ -35,7 +41,7 @@ cfg.selection.preferMaximumLead = true;
 cfg.selection.keepOneContextPerFactorialCell = true;
 cfg.selection.trainingIncludesBoundaryOnly = false;
 cfg.selection.rule = ...
-    'counterfactual_event_then_maximum_lead_then_maximum_risk';
+    'hard_event_then_maximum_lead_then_maximum_risk';
 
 cfg.online.hiddenPlantParametersAllowed = false;
 cfg.online.hiddenDisturbanceRealizationAllowed = false;

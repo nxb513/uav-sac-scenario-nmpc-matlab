@@ -1,6 +1,6 @@
 # Cause-coverage interpretation
 
-Status: diagnostic recommendation; final thresholds are not locked.
+Status: C012 approved and locked on 2026-09-04.
 
 The approved body-rate sensitivity grid contains 1,536 combinations over
 477,900 candidate H=20 contexts. The main body-rate comparison holds the other
@@ -37,6 +37,6 @@ crossings. The recommended formulation is therefore:
 - growth-only: separate auxiliary/boundary stratum, not silently merged into
   the hard failure label.
 
-This recommendation uses only frozen LQR validation traces. It does not use
-NMPC, SAC, surrogate, test or OOD outcomes and requires user approval before
-the context bank is frozen.
+This selection uses only frozen LQR validation traces. It does not use NMPC,
+SAC, surrogate, test or OOD outcomes. The downstream context bank uses an
+independent teacher-training seed and keeps growth-only labels separate.

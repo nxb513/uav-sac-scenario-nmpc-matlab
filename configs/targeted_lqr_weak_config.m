@@ -132,8 +132,7 @@ cfg.weakness.constraintMarginFraction = [0.20, 0.10, 0.05];
 cfg.weakness.minimumTeacherPositionGainM = 0.01;
 cfg.weakness.minimumTeacherRelativeGain = 0.10;
 
-cfg.predictiveAnalysis.status = ...
-    'diagnostic_grid_requires_user_approval_before_threshold_freeze';
+cfg.predictiveAnalysis.status = 'locked_c012_on_validation_20260904';
 cfg.predictiveAnalysis.sourceBankSubfolder = ...
     cfg.screenBenchmark.bankOutputSubfolder;
 cfg.predictiveAnalysis.sourceScreenSubfolder = ...
@@ -145,26 +144,26 @@ cfg.predictiveAnalysis.evaluationStartStep = ...
     cfg.screenBenchmark.evaluationStartStep;
 cfg.predictiveAnalysis.representativePositiveFractions = ...
     [0.01, 0.025, 0.05, 0.10];
-cfg.predictiveAnalysis.finalThresholdsLocked = false;
+cfg.predictiveAnalysis.finalThresholdsLocked = true;
+cfg.predictiveAnalysis.lockedCandidateId = 'C012';
 
-cfg.specialistBank.sourceSubfolder = 'specialist_local_context_banks_v2';
 cfg.specialistBank.outputSubfolder = ...
-    'specialist_local_context_banks_200step_v1';
-cfg.specialistBank.trainReplicatesPerCell = 20;
-cfg.specialistBank.validationReplicatesPerCell = 10;
-cfg.specialistBank.rankingWindowSteps = 10;
+    'specialist_predivergence_context_bank_c012_v1';
+cfg.specialistBank.status = ...
+    'approved_c012_hard_target_independent_training_bank';
+cfg.specialistBank.sourceReplicatesPerCell = 20;
+cfg.specialistBank.sourceEpisodeCount = 2700;
 cfg.specialistBank.sourceStepCount = 400;
 cfg.specialistBank.localEpisodeSteps = 200;
 cfg.specialistBank.maximumPredictionHorizon = 20;
-cfg.specialistBank.trainContextsPerCell = 10;
-cfg.specialistBank.validationContextsPerCell = 5;
-cfg.specialistBank.cloudContextsPerCell = 1;
-cfg.specialistBank.minimumStartStep = 10;
-cfg.specialistBank.positionScoreScaleM = 0.10;
-cfg.specialistBank.attitudeScoreScaleDeg = 5.0;
+cfg.specialistBank.maximumHardContextsPerCell = 10;
+cfg.specialistBank.maximumGrowthContextsPerCell = 5;
+cfg.specialistBank.maximumSafeContextsPerCell = 1;
+cfg.specialistBank.minimumStartStep = 5;
 cfg.specialistBank.selectionRule = ...
-    'top_local_lqr_deficit_per_balanced_factorial_cell';
-cfg.specialistBank.absoluteThresholdIsGate = false;
+    ['one_best_context_per_episode_then_balanced_cap_per_cell_' ...
+    'hard_only_for_sac_growth_and_safe_retained_separately'];
+cfg.specialistBank.absoluteThresholdIsGate = true;
 
 cfg.split.screenSeed = 300830201;
 cfg.split.teacherTrainSeed = 300830301;
@@ -173,6 +172,7 @@ cfg.split.surrogateTrainSeed = 300830501;
 cfg.split.surrogateValidationSeed = 300830601;
 cfg.split.confirmationSeed = 300830701;
 cfg.split.oodLocked = true;
+cfg.specialistBank.sourceSeed = cfg.split.teacherTrainSeed;
 
 cfg.reproducibility.finalGridLocked = false;
 cfg.reproducibility.longRunAuthorized = false;
