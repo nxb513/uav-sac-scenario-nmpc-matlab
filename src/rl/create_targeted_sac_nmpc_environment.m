@@ -114,9 +114,11 @@ env = rlFunctionEnv(observationInfo, actionInfo, ...
             predictionResidual = nextState - solution.Xpred(:, 2);
             nextReference = info.Reference(:, min(stepIndex + 1, ...
                 size(info.Reference, 2)));
+            [solverAccepted, solverAcceptanceReason] = ...
+                targeted_nmpc_accept_solution(solution, cfg);
             [reward, components, constraintViolation] = compute_reward( ...
                 nextState, nextReference, input, info.PreviousInput, ...
-                solution, nmpcCfg, cfg);
+                solution, nmpcCfg, solverAccepted, cfg);
             finiteTransition = all(isfinite(nextState)) && ...
                 all(isfinite(input)) && isfinite(reward) && ...
                 isfinite(solution.solveTime);
@@ -125,7 +127,7 @@ env = rlFunctionEnv(observationInfo, actionInfo, ...
             outsideRegion = any(abs(nextState(1:3)) > ...
                 cfg.environment.maxAbsolutePosition);
             isDone = stepIndex >= cfg.environment.stepsPerEpisode || ...
-                ~finiteTransition || solution.exitflag <= 0 || ...
+                ~finiteTransition || ~solverAccepted || ...
                 invalidEuler || outsideRegion || constraintViolation;
             info.WarmStart = nmpc_shift_sequence(solution.U, ...
                 solution.U(:, end));
@@ -135,7 +137,9 @@ env = rlFunctionEnv(observationInfo, actionInfo, ...
             scenarioCount = mapping.scenarioCount;
             exitflag = solution.exitflag;
             solverTimedOut = solution.timedOut;
+            solverConverged = solution.converged;
             solverFeasible = solution.feasible;
+            solverFeasibleSuboptimal = solution.feasibleSuboptimal;
             maxConstraintViolation = solution.maxConstraintViolation;
         catch exception
             exceptionIdentifier = exception.identifier;
@@ -152,7 +156,11 @@ env = rlFunctionEnv(observationInfo, actionInfo, ...
             scenarioCount = info.PreviousScenarioCount;
             exitflag = -999;
             solverTimedOut = false;
+            solverConverged = false;
             solverFeasible = false;
+            solverFeasibleSuboptimal = false;
+            solverAccepted = false;
+            solverAcceptanceReason = "exception";
             maxConstraintViolation = Inf;
         end
 
@@ -172,7 +180,13 @@ env = rlFunctionEnv(observationInfo, actionInfo, ...
         info.Log.ScenarioCount(stepIndex) = scenarioCount;
         info.Log.Exitflag(stepIndex) = exitflag;
         info.Log.SolverTimedOut(stepIndex) = solverTimedOut;
+        info.Log.SolverConverged(stepIndex) = solverConverged;
         info.Log.SolverFeasible(stepIndex) = solverFeasible;
+        info.Log.SolverFeasibleSuboptimal(stepIndex) = ...
+            solverFeasibleSuboptimal;
+        info.Log.SolverAccepted(stepIndex) = solverAccepted;
+        info.Log.SolverAcceptanceReason(stepIndex) = ...
+            solverAcceptanceReason;
         info.Log.MaximumConstraintViolation(stepIndex) = ...
             maxConstraintViolation;
         info.Log.ExceptionIdentifier{stepIndex} = exceptionIdentifier;
@@ -279,7 +293,8 @@ clear cleanup;
 end
 
 function [reward, components, constraintViolation] = compute_reward( ...
-        state, reference, input, previousInput, solution, nmpcCfg, cfg)
+        state, reference, input, previousInput, solution, nmpcCfg, ...
+        solverAccepted, cfg)
 error = nmpc_state_error(state, reference);
 scaledError = error ./ cfg.observation.errorScale;
 inputScale = actuator_ranges(cfg.nmpc.plant.nominal);
@@ -294,7 +309,7 @@ components = [sum(scaledError(1:3) .^ 2); ...
     sum(((input - previousInput) ./ inputScale) .^ 2); ...
     min(solution.solveTime / cfg.observation.solveTimeScale, 10); ...
     double(constraintViolation) + sum(positiveViolation .^ 2); ...
-    double(solution.exitflag <= 0)];
+    double(~solverAccepted)];
 reward = -dot(cfg.reward.weights, components);
 end
 
@@ -317,7 +332,11 @@ log.ControlHorizon = nan(1, stepCount);
 log.ScenarioCount = nan(1, stepCount);
 log.Exitflag = nan(1, stepCount);
 log.SolverTimedOut = false(1, stepCount);
+log.SolverConverged = false(1, stepCount);
 log.SolverFeasible = false(1, stepCount);
+log.SolverFeasibleSuboptimal = false(1, stepCount);
+log.SolverAccepted = false(1, stepCount);
+log.SolverAcceptanceReason = strings(1, stepCount);
 log.MaximumConstraintViolation = nan(1, stepCount);
 log.ExceptionIdentifier = repmat({''}, 1, stepCount);
 end
