@@ -1,0 +1,50 @@
+name: MATLAB C012 NMPC feasibility screen
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-feasibility-screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+    env:
+      NMPC_MAX_WALL_SECONDS: "60"
+      PARALLEL_WORKERS: "2"
+    steps:
+      - name: Check out public research package
+        uses: actions/checkout@v6
+
+      - name: Set up MATLAB and required products
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: Optimization_Toolbox Parallel_Computing_Toolbox Control_System_Toolbox Statistics_and_Machine_Learning_Toolbox
+          cache: true
+
+      - name: Rebuild and audit independent C012 context bank
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); build_targeted_c012_context_bank; audit_targeted_c012_context_bank; audit_targeted_sac_nmpc_contract
+
+      - name: Run bounded 210-solve feasibility screen
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); benchmark_targeted_c012_nmpc_feasibility
+
+      - name: Upload lightweight feasibility results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c012-nmpc-feasibility-screen-${{ github.run_id }}
+          path: |
+            results/targeted_lqr_weak_rebuild_v1/specialist_nmpc_c012_feasibility_screen_v1/
+            results/targeted_lqr_weak_rebuild_v1/specialist_sac_nmpc_contract_audit_v1/
+            results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_v1/*.md
+            results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_v1/*.txt
+            results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_v1/*.csv
+          if-no-files-found: warn
+          retention-days: 14
+

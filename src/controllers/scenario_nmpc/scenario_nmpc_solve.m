@@ -1,5 +1,10 @@
-function sol = scenario_nmpc_solve(x0, reference, thetaScenarios, cfg, warmStart)
+function sol = scenario_nmpc_solve( ...
+        x0, reference, thetaScenarios, cfg, warmStart, previousInput)
 %SCENARIO_NMPC_SOLVE Nonlinear scenario MPC teacher with shared input sequence.
+
+if nargin < 6
+    previousInput = [];
+end
 
 if nargin < 4 || isempty(cfg)
     cfg = step2_nmpc_config();
@@ -17,7 +22,8 @@ Ucontrol0 = prepare_warm_start(nominalTheta, horizon, controlHorizon, warmStart)
 [lb, ub] = nmpc_input_bounds(nominalTheta, controlHorizon);
 z0 = min(max(Ucontrol0(:), lb), ub);
 
-objective = @(z) scenario_objective(z, x0, Xref, thetaScenarios, cfg);
+objective = @(z) scenario_objective( ...
+    z, x0, Xref, thetaScenarios, cfg, previousInput);
 nonlcon = @(z) scenario_constraints(z, x0, thetaScenarios, cfg);
 if ~cfg.constraints.enableStateBounds || ~cfg.constraints.enforceScenarioStateBounds
     nonlcon = [];
@@ -40,6 +46,13 @@ UcontrolOpt = reshape(zOpt, 4, controlHorizon);
 Uopt = nmpc_expand_control_sequence(UcontrolOpt, horizon);
 XpredScenarios = rollout_all_scenarios(x0, Uopt, thetaScenarios, cfg);
 XpredMean = mean(XpredScenarios, 3);
+[maxConstraintViolation, maxStateConstraintViolation, ...
+    maxInputConstraintViolation] = solution_constraint_violation( ...
+    zOpt, lb, ub, XpredScenarios, cfg);
+finiteSolution = all(isfinite(zOpt)) && isfinite(fval) && ...
+    all(isfinite(XpredScenarios), 'all');
+feasible = finiteSolution && maxConstraintViolation <= ...
+    cfg.solver.constraintTolerance;
 
 sol.u0 = Uopt(:, 1);
 sol.U = Uopt;
@@ -53,6 +66,14 @@ sol.exitflag = exitflag;
 sol.output = output;
 sol.solveTime = solveTime;
 sol.timedOut = stoppedByWallTime;
+sol.converged = exitflag > 0;
+sol.limitReached = exitflag == 0;
+sol.feasible = feasible;
+sol.feasibleSuboptimal = feasible && exitflag == 0 && ...
+    ~stoppedByWallTime;
+sol.maxConstraintViolation = maxConstraintViolation;
+sol.maxStateConstraintViolation = maxStateConstraintViolation;
+sol.maxInputConstraintViolation = maxInputConstraintViolation;
 sol.solver = cfg.solver.name;
 sol.algorithm = cfg.solver.algorithm;
 
@@ -101,7 +122,8 @@ U0 = U0(:, 1:controlHorizon);
 Ucontrol0 = nmpc_saturate_sequence(U0, theta);
 end
 
-function cost = scenario_objective(z, x0, Xref, thetaScenarios, cfg)
+function cost = scenario_objective( ...
+        z, x0, Xref, thetaScenarios, cfg, previousInput)
 controlHorizon = nmpc_control_horizon(cfg);
 Ucontrol = reshape(z, 4, controlHorizon);
 U = nmpc_expand_control_sequence(Ucontrol, cfg.predictionHorizon);
@@ -112,10 +134,28 @@ for i = 1:scenarioCount
     theta = thetaScenarios(i);
     X = nmpc_rollout(x0, U, theta, cfg.sampleTime, ...
                      cfg.rollout.disturbance, cfg.rollout.startTime);
-    cost = cost + nmpc_tracking_cost(X, U, Xref, theta, cfg);
+    cost = cost + nmpc_tracking_cost( ...
+        X, U, Xref, theta, cfg, previousInput);
 end
 
 cost = cost / scenarioCount;
+end
+
+function [maximum, stateMaximum, inputMaximum] = ...
+        solution_constraint_violation(z, lb, ub, XpredScenarios, cfg)
+inputMaximum = max([0; z(:) - ub(:); lb(:) - z(:)]);
+stateMaximum = 0;
+for index = 1:size(XpredScenarios, 3)
+    violation = nmpc_state_bound_violations( ...
+        XpredScenarios(:, :, index), cfg);
+    if ~isempty(violation)
+        stateMaximum = max(stateMaximum, max([0; violation(:)]));
+    end
+end
+maximum = max(inputMaximum, stateMaximum);
+if ~isfinite(maximum)
+    maximum = Inf;
+end
 end
 
 function [c, ceq] = scenario_constraints(z, x0, thetaScenarios, cfg)

@@ -64,6 +64,13 @@ contexts for audit only. Stages 1-3 may use hard plus growth-only contexts;
 stage 4 uses hard contexts only. Growth-only is never relabeled as a hard
 confidence target.
 
+Before launching SAC, run **MATLAB C012 NMPC feasibility screen**. It rebuilds
+and audits the independent bank, verifies the 14-pair teacher contract, then
+runs 210 bounded solves over five trajectory families, three Q/R profiles and
+all horizon pairs at fixed `M=5`. This screen separates solver convergence,
+constraint feasibility and wall-time termination; it does not train SAC or
+select the final grid.
+
 Run `MATLAB finalize targeted LQR selection` after the 250-candidate design
 artifact is available. This inexpensive stage rebuilds only the corrected
 1,350-episode selection bank and re-evaluates the frozen design top five. It

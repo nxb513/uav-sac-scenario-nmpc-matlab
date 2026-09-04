@@ -106,7 +106,7 @@ env = rlFunctionEnv(observationInfo, actionInfo, ...
                 stepIndex, time, nmpcCfg);
             solution = scenario_nmpc_solve(info.State, referenceWindow, ...
                 info.ThetaScenarios(1:mapping.scenarioCount), ...
-                nmpcCfg, warmStart);
+                nmpcCfg, warmStart, info.PreviousInput);
             input = solution.u0;
             nextState = quad_step_rk4(time, info.State, input, ...
                 cfg.environment.sampleTime, info.ThetaPlant, ...
@@ -135,6 +135,8 @@ env = rlFunctionEnv(observationInfo, actionInfo, ...
             scenarioCount = mapping.scenarioCount;
             exitflag = solution.exitflag;
             solverTimedOut = solution.timedOut;
+            solverFeasible = solution.feasible;
+            maxConstraintViolation = solution.maxConstraintViolation;
         catch exception
             exceptionIdentifier = exception.identifier;
             nextState = info.State;
@@ -150,6 +152,8 @@ env = rlFunctionEnv(observationInfo, actionInfo, ...
             scenarioCount = info.PreviousScenarioCount;
             exitflag = -999;
             solverTimedOut = false;
+            solverFeasible = false;
+            maxConstraintViolation = Inf;
         end
 
         nextReference = info.Reference(:, min(stepIndex + 1, ...
@@ -168,6 +172,9 @@ env = rlFunctionEnv(observationInfo, actionInfo, ...
         info.Log.ScenarioCount(stepIndex) = scenarioCount;
         info.Log.Exitflag(stepIndex) = exitflag;
         info.Log.SolverTimedOut(stepIndex) = solverTimedOut;
+        info.Log.SolverFeasible(stepIndex) = solverFeasible;
+        info.Log.MaximumConstraintViolation(stepIndex) = ...
+            maxConstraintViolation;
         info.Log.ExceptionIdentifier{stepIndex} = exceptionIdentifier;
         info.StepIndex = stepIndex;
         info.State = nextState;
@@ -310,6 +317,8 @@ log.ControlHorizon = nan(1, stepCount);
 log.ScenarioCount = nan(1, stepCount);
 log.Exitflag = nan(1, stepCount);
 log.SolverTimedOut = false(1, stepCount);
+log.SolverFeasible = false(1, stepCount);
+log.MaximumConstraintViolation = nan(1, stepCount);
 log.ExceptionIdentifier = repmat({''}, 1, stepCount);
 end
 

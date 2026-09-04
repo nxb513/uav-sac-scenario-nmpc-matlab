@@ -1,0 +1,159 @@
+function audit_targeted_sac_nmpc_contract()
+%AUDIT_TARGETED_SAC_NMPC_CONTRACT Freeze the pre-training teacher contract.
+
+projectRoot = fileparts(fileparts(mfilename('fullpath')));
+addpath(fullfile(projectRoot, 'configs'));
+addpath(genpath(fullfile(projectRoot, 'src')));
+cfg = targeted_specialist_sac_config();
+divergenceCfg = targeted_lqr_divergence_config();
+
+assert(cfg.action.dimension == 8, 'SAC action must have eight dimensions.');
+assert(cfg.nmpc.scenario.count == 5 && ...
+    isequal(cfg.environment.scenarioCountBank, 5), ...
+    'Scenario count M must remain fixed at five.');
+assert(cfg.reward.weights(7) == 0, ...
+    'NMPC solve time must have zero reward weight.');
+assert(cfg.environment.stepsPerEpisode == 200, ...
+    'The active SAC episode must contain 200 control steps.');
+assert(cfg.training.checkpointFrequencyEpisodes == 50, ...
+    'Checkpoints must be saved every 50 episodes.');
+assert(divergenceCfg.finalThresholdsLocked && ...
+    strcmp(divergenceCfg.lockedCandidateId, 'C012'), ...
+    'The teacher requires locked C012 contexts.');
+assert(strcmp(cfg.environment.exitflagZeroPolicy, ...
+    'terminate_pending_feasible_suboptimal_runtime_screen'), ...
+    'Exitflag-zero policy changed before the runtime screen.');
+
+pairs = enumerate_reachable_pairs(cfg);
+assert(height(pairs) == 14 && all(pairs.Nc <= pairs.N), ...
+    'The active SAC map must expose exactly 14 feasible horizon pairs.');
+
+bankPath = fullfile(projectRoot, cfg.trainingBankPath);
+assert(isfile(bankPath), 'The audited C012 context bank is missing.');
+artifact = load(bankPath, 'trainContextBank', 'trainContextManifest', ...
+    'auxiliaryGrowthContextBank', 'auxiliaryGrowthContextManifest', ...
+    'buildMetadata');
+assert(numel(artifact.trainContextBank) == 261 && ...
+    numel(artifact.auxiliaryGrowthContextBank) == 323, ...
+    'The active context-bank counts differ from the frozen audit.');
+assert(all([artifact.trainContextBank.HardEvent]) && ...
+    ~any([artifact.trainContextBank.GrowthOnly]), ...
+    'Hard and growth-only context strata are mixed.');
+
+active = [artifact.trainContextBank; artifact.auxiliaryGrowthContextBank];
+disturbanceType = string(arrayfun(@(item) item.Disturbance.type, active, ...
+    'UniformOutput', false)).';
+disturbanceLevel = arrayfun(@(item) item.Disturbance.levelIndex, active).';
+contextClass = string({active.ContextClass}).';
+stageCounts = [nnz(disturbanceType == "zero"), ...
+    nnz(disturbanceType == "zero" | disturbanceLevel == 1), ...
+    nnz(ismember(disturbanceType, ...
+    ["gust", "sinusoidal", "stochastic"])), ...
+    nnz(contextClass == "hard_event")];
+assert(isequal(stageCounts, [24, 119, 382, 261]), ...
+    'Curriculum context coverage differs from the audited bank.');
+
+verify_previous_input_smoothness(cfg.nmpc);
+
+outputRoot = fullfile(projectRoot, cfg.targeted.resultRoot, ...
+    'specialist_sac_nmpc_contract_audit_v1');
+assert(~isfolder(outputRoot), 'Refusing to overwrite %s.', outputRoot);
+mkdir(outputRoot);
+writetable(pairs, fullfile(outputRoot, 'reachable_horizon_pairs.csv'));
+write_report(outputRoot, cfg, stageCounts, artifact.buildMetadata);
+write_text(fullfile(outputRoot, 'COMPLETED.txt'), sprintf( ...
+    ['task=audit_targeted_sac_nmpc_contract\nstatus=passed\n' ...
+    'reachable_pairs=%d\nscenario_count=5\nepisode_steps=200\n' ...
+    'checkpoint_frequency_episodes=50\nsolve_time_reward_weight=0\n' ...
+    'curriculum_stage_counts=%d,%d,%d,%d\n' ...
+    'exitflag_zero_policy=terminate_pending_runtime_screen\n'], ...
+    height(pairs), stageCounts));
+fprintf(['Targeted SAC-NMPC contract passed: 14 pairs, M=5, ' ...
+    'stages=[%d %d %d %d].\n'], stageCounts);
+end
+
+function pairs = enumerate_reachable_pairs(cfg)
+rows = repmat(struct('N', 0, 'Nc', 0, 'NAction', NaN, ...
+    'NcAction', NaN), 0, 1);
+for horizonIndex = 1:numel(cfg.environment.horizonBank)
+    horizonAction = action_for_index( ...
+        horizonIndex, numel(cfg.environment.horizonBank));
+    horizon = cfg.environment.horizonBank(horizonIndex);
+    feasibleControl = cfg.environment.controlHorizonBank( ...
+        cfg.environment.controlHorizonBank <= horizon);
+    for controlIndex = 1:numel(feasibleControl)
+        action = zeros(cfg.action.dimension, 1);
+        action(7) = horizonAction;
+        action(8) = action_for_index(controlIndex, numel(feasibleControl));
+        [~, mapping] = rl_nmpc_action_to_config(action, cfg);
+        assert(mapping.horizon == horizon && ...
+            mapping.controlHorizon == feasibleControl(controlIndex), ...
+            'A declared horizon pair is unreachable from the SAC action.');
+        row = struct('N', mapping.horizon, ...
+            'Nc', mapping.controlHorizon, ...
+            'NAction', action(7), 'NcAction', action(8));
+        rows(end + 1, 1) = row; %#ok<AGROW>
+    end
+end
+pairs = struct2table(rows);
+pairs = sortrows(pairs, {'N', 'Nc'});
+assert(height(unique(pairs(:, {'N', 'Nc'}), 'rows')) == height(pairs), ...
+    'The SAC action map contains duplicate horizon pairs.');
+end
+
+function value = action_for_index(index, count)
+value = -1 + 2 * (index - 0.5) / count;
+end
+
+function verify_previous_input_smoothness(nmpcCfg)
+theta = nmpcCfg.plant.nominal;
+nmpcCfg.predictionHorizon = 1;
+nmpcCfg.controlHorizon = 1;
+state = zeros(12, 1);
+state(3) = 1;
+X = [state, state];
+reference = X;
+input = quad_hover_input(theta);
+withoutPrevious = nmpc_tracking_cost( ...
+    X, input, reference, theta, nmpcCfg, []);
+withPrevious = nmpc_tracking_cost(X, input, reference, theta, ...
+    nmpcCfg, input + [0.1; 0; 0; 0]);
+assert(withPrevious > withoutPrevious, ...
+    'PreviousInput does not affect the first dU term.');
+end
+
+function write_report(root, cfg, stageCounts, metadata)
+fileId = fopen(fullfile(root, 'contract_audit.md'), 'w');
+assert(fileId >= 0, 'Cannot open contract audit report.');
+cleanup = onCleanup(@() fclose(fileId));
+fprintf(fileId, '# Targeted SAC-scenario-NMPC contract audit\n\n');
+fprintf(fileId, '- SAC action dimension: 8.\n');
+fprintf(fileId, '- Reachable (N,Nc) pairs: 14.\n');
+fprintf(fileId, '- Prediction horizons: %s.\n', ...
+    mat2str(cfg.environment.horizonBank));
+fprintf(fileId, '- Control horizons: %s, filtered by Nc<=N.\n', ...
+    mat2str(cfg.environment.controlHorizonBank));
+fprintf(fileId, '- Scenario count: M=5 fixed.\n');
+fprintf(fileId, '- Episode/checkpoint: 200 steps / 50 episodes.\n');
+fprintf(fileId, '- Solve-time reward weight: 0.\n');
+fprintf(fileId, '- Curriculum active counts: [%d,%d,%d,%d].\n', ...
+    stageCounts);
+fprintf(fileId, '- Context source seed: %d.\n', metadata.sourceSeed);
+fprintf(fileId, ['- PreviousInput is included in the first dU cost; ' ...
+    'its deterministic contract test passed.\n']);
+fprintf(fileId, ['- exitflag=0 still terminates an episode pending the ' ...
+    'bounded feasible-suboptimal runtime screen. Convergence, feasibility, ' ...
+    'timeout and maximum constraint violation are logged separately.\n']);
+fprintf(fileId, ['\nThis audit does not train SAC, solve the 14-pair runtime ' ...
+    'screen, alter the final research budget or open test/OOD data.\n']);
+clear cleanup;
+end
+
+function write_text(path, content)
+fileId = fopen(path, 'w');
+assert(fileId >= 0, 'Cannot open %s.', path);
+cleanup = onCleanup(@() fclose(fileId));
+fprintf(fileId, '%s', content);
+clear cleanup;
+end
+
