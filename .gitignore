@@ -9,6 +9,7 @@ results/targeted_lqr_weak_rebuild_v1/specialist_sac_v1/
 results/targeted_lqr_weak_rebuild_v1/specialist_sac_causal_v2/
 results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_causal_v2/
 results/targeted_lqr_weak_rebuild_v1/specialist_sac_nmpc_contract_audit_causal_v2/
+results/targeted_lqr_weak_rebuild_v1/specialist_teacher_closed_loop_capability_h20_v1/
 
 # OS/editor files
 .DS_Store

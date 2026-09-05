@@ -1,0 +1,86 @@
+name: MATLAB targeted teacher closed-loop capability
+
+on:
+  workflow_dispatch:
+    inputs:
+      resume_run_id:
+        description: Optional prior capability run ID with completed task files
+        required: false
+        default: ""
+        type: string
+      solver_wall_seconds:
+        description: Candidate per-solve wall guard, not a final hyperparameter
+        required: true
+        default: "60"
+        type: choice
+        options:
+          - "30"
+          - "60"
+          - "120"
+      workers:
+        description: Parallel process workers
+        required: true
+        default: "3"
+        type: choice
+        options:
+          - "2"
+          - "3"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  paired-h20-capability:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 355
+    env:
+      NMPC_MAX_WALL_SECONDS: ${{ inputs.solver_wall_seconds }}
+      PARALLEL_WORKERS: ${{ inputs.workers }}
+      TEACHER_ATTEMPT_ID: ${{ github.run_id }}
+      TEACHER_RESUME_ROOT: ${{ github.workspace }}/resume_input
+    steps:
+      - name: Check out public research package
+        uses: actions/checkout@v6
+
+      - name: Download prior capability tasks
+        if: ${{ inputs.resume_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: teacher-capability-h20-${{ inputs.resume_run_id }}
+          path: resume_input
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.resume_run_id }}
+
+      - name: Set up MATLAB and required products
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: Optimization_Toolbox Parallel_Computing_Toolbox Control_System_Toolbox Statistics_and_Machine_Learning_Toolbox
+          cache: true
+
+      - name: Rebuild and audit causal-v2 context bank
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('tests/learning'); addpath('experiments'); build_targeted_c012_context_bank; audit_targeted_c012_context_bank; audit_targeted_sac_nmpc_contract; run_targeted_teacher_capability_contract_tests
+
+      - name: Run paired H20 teacher capability tasks
+        timeout-minutes: 330
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); validate_targeted_teacher_closed_loop
+
+      - name: Upload completed and resumable task files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: teacher-capability-h20-${{ github.run_id }}
+          path: |
+            results/targeted_lqr_weak_rebuild_v1/specialist_teacher_closed_loop_capability_h20_v1/
+            results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_causal_v2/*.md
+            results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_causal_v2/*.txt
+            results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_causal_v2/*.csv
+            results/targeted_lqr_weak_rebuild_v1/specialist_sac_nmpc_contract_audit_causal_v2/
+          if-no-files-found: warn
+          retention-days: 7

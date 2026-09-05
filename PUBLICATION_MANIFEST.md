@@ -18,6 +18,7 @@ The public package contains only:
 - manual GitHub Actions workflows for contract validation, probes and the
   staged checkpoint stream;
 - the bounded 210-solve C012 NMPC convergence/feasibility screen;
+- the resumable 90-task paired H=20 teacher closed-loop capability gate;
 - the original and corrected nominal reference-feasibility CSV/MAT artifacts
   and reports, with the original explicitly marked superseded;
 - documentation and repository metadata.

@@ -79,6 +79,15 @@ all horizon pairs at fixed `M=5`. This screen separates solver convergence,
 constraint feasibility and wall-time termination; it does not train SAC or
 select the final grid.
 
+The next development gate is **MATLAB targeted teacher closed-loop
+capability**. It evaluates 90 resumable paired tasks: five trajectory families,
+three within-family LQR lead-time ranks, three representative horizon/weight
+anchors and two solver algorithms. Each task rolls the teacher for H=20 on the
+same plant, reference and disturbance as its frozen LQR counterfactual. This
+gate does not reduce the 14-pair SAC grid or authorize a solver/acceptance
+change; it records converged, feasible-suboptimal, event-avoidance, constraint
+and latency evidence for review.
+
 Run `MATLAB finalize targeted LQR selection` after the 250-candidate design
 artifact is available. This inexpensive stage rebuilds only the corrected
 1,350-episode selection bank and re-evaluates the frozen design top five. It
