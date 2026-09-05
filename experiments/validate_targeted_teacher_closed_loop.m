@@ -45,8 +45,8 @@ if mode == "single_case_probe"
 end
 assert(mode == "run", 'Unknown execution mode: %s.', mode);
 
-bankSha256 = sha256_file(bankPath);
-lqrSha256 = sha256_file(lqrPath);
+bankSha256 = quad_sha256_file(bankPath);
+lqrSha256 = quad_sha256_file(lqrPath);
 
 attemptId = environment_text('TEACHER_ATTEMPT_ID', ...
     char(datetime('now', 'Format', 'yyyyMMdd_HHmmss')));
@@ -622,20 +622,11 @@ function write_hashes(root, names)
 lines = strings(numel(names), 1);
 for index = 1:numel(names)
     path = fullfile(root, names{index});
-    lines(index) = sha256_file(path) + "  " + string(names{index});
+    lines(index) = string(quad_sha256_file(path)) + "  " + ...
+        string(names{index});
 end
 write_text(fullfile(root, 'SHA256SUMS.txt'), ...
     char(strjoin(lines, newline) + newline));
-end
-
-function hash = sha256_file(path)
-algorithm = System.Security.Cryptography.SHA256.Create();
-stream = System.IO.File.OpenRead(path);
-bytes = algorithm.ComputeHash(stream);
-stream.Dispose();
-algorithm.Dispose();
-hash = lower(string(char( ...
-    System.BitConverter.ToString(bytes).Replace('-', ''))));
 end
 
 function value = environment_positive_number(name, defaultValue)

@@ -91,7 +91,7 @@ write_text(fullfile(root, 'AUDIT_COMPLETED.txt'), sprintf( ...
     numel(growth), numel(safe), max(currentNormalized), stageCount));
 write_text(fullfile(root, 'training_local_context_bank.sha256'), ...
     sprintf('%s  training_local_context_bank.mat\n', ...
-    sha256_file(artifactPath)));
+    quad_sha256_file(artifactPath)));
 fprintf(['C012 context-bank audit passed: hard=%d, growth=%d, safe=%d, ' ...
     'stages=[%d %d %d %d].\n'], numel(hard), numel(growth), ...
     numel(safe), stageCount);
@@ -124,13 +124,4 @@ assert(fileId >= 0, 'Cannot open %s.', path);
 cleanup = onCleanup(@() fclose(fileId));
 fprintf(fileId, '%s', content);
 clear cleanup;
-end
-
-function hash = sha256_file(path)
-algorithm = System.Security.Cryptography.SHA256.Create();
-stream = System.IO.File.OpenRead(path);
-bytes = algorithm.ComputeHash(stream);
-stream.Dispose();
-algorithm.Dispose();
-hash = upper(char(System.BitConverter.ToString(bytes).Replace('-', '')));
 end
