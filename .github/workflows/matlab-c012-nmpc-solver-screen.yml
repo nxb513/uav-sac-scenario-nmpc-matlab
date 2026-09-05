@@ -41,8 +41,8 @@ jobs:
           name: c012-nmpc-solver-screen-${{ github.run_id }}
           path: |
             results/targeted_lqr_weak_rebuild_v1/specialist_nmpc_c012_solver_algorithm_screen_v1/
-            results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_v1/*.md
-            results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_v1/*.txt
-            results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_v1/*.csv
+            results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_causal_v2/*.md
+            results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_causal_v2/*.txt
+            results/targeted_lqr_weak_rebuild_v1/specialist_predivergence_context_bank_c012_causal_v2/*.csv
           if-no-files-found: warn
           retention-days: 14

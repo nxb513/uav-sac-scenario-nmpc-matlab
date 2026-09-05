@@ -2,15 +2,16 @@ function cfg = targeted_specialist_sac_config()
 %TARGETED_SPECIALIST_SAC_CONFIG New SAC run restricted to LQR-weak contexts.
 
 targeted = targeted_lqr_weak_config();
-cfg.name = 'targeted_specialist_sac_v1';
+cfg.name = 'targeted_specialist_sac_causal_v2';
 cfg.status = ...
-    'c012_locked_context_bank_required_before_training';
+    'approved_contract_causal_v2_bank_required_before_training';
 cfg.targeted = targeted;
 cfg.divergence = targeted_lqr_divergence_config();
 cfg.trainingBankPath = fullfile(targeted.resultRoot, ...
     targeted.specialistBank.outputSubfolder, ...
     'training_local_context_bank.mat');
-cfg.outputRoot = fullfile(targeted.resultRoot, 'specialist_sac_v1');
+cfg.outputRoot = fullfile(targeted.resultRoot, ...
+    'specialist_sac_causal_v2');
 cfg.nmpc = step2_nmpc_config();
 cfg.nmpc.plant.uncertainty.targeted.rho = ...
     targeted.uncertainty.targeted.rho;
@@ -29,7 +30,8 @@ cfg.environment.baseEpisodeSeed = 300831501;
 cfg.environment.workerSeedStride = 1000000;
 cfg.environment.scenarioSeedOffset = 200000;
 cfg.environment.terminateCosPitchMargin = 0.15;
-cfg.environment.maxAbsolutePosition = 20.0;
+cfg.environment.positionTerminationPolicy = 'nmpc_state_bounds_only';
+cfg.environment.maxAbsolutePosition = Inf;
 cfg.environment.forceCurriculumStage = 0;
 cfg.environment.curriculumTransitionFractions = [0.15, 0.35, 0.65];
 cfg.environment.curriculumStageNames = { ...
@@ -56,11 +58,24 @@ cfg.action.groupWeightBounds = [0.10, 100.0; ...
     1e-4, 1.0; ...
     1e-4, 1.0];
 cfg.action.terminalWeightMultiplier = 4.0;
-cfg.observation.dimension = 31;
+cfg.observation.featureVersion = 'causal_feature_v2';
+cfg.observation.dimension = 328;
 cfg.observation.errorScale = [1.0; 1.0; 1.0; ...
     0.50; 0.50; 0.75; 2.0; 2.0; 2.0; 2.0; 2.0; 2.0];
 cfg.observation.residualScale = [0.20; 0.20; 0.20; ...
     0.10; 0.10; 0.10; 0.50; 0.50; 0.50; 0.50; 0.50; 0.50];
+cfg.observation.stateScale = max(abs([ ...
+    cfg.nmpc.constraints.stateLower(:), ...
+    cfg.nmpc.constraints.stateUpper(:)]), [], 2);
+cfg.observation.referenceScale = cfg.observation.stateScale;
+cfg.observation.inputCenter = [cfg.nmpc.plant.nominal.m * ...
+    cfg.nmpc.plant.nominal.g / cfg.nmpc.plant.nominal.alphaT; ...
+    0; 0; 0];
+cfg.observation.inputScale = [ ...
+    diff(cfg.nmpc.plant.nominal.inputLimits.T); ...
+    diff(cfg.nmpc.plant.nominal.inputLimits.tau, 1, 2)];
+cfg.observation.includeSolveTime = false;
+cfg.observation.includeTeacherPrediction = false;
 cfg.observation.solveTimeScale = 1.0;
 cfg.observation.clip = 5.0;
 

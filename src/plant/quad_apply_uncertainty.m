@@ -29,6 +29,5 @@ theta.Dv = nominal.Dv(:) .* scale(5:7);
 theta.Domega = nominal.Domega(:) .* scale(8:10);
 theta.alphaT = nominal.alphaT * scale(11);
 theta.alphaTau = nominal.alphaTau(:) .* scale(12:14);
-
-theta.inputLimits.T = [0.0; 4.0 * theta.m * theta.g];
+theta.inputLimits = nominal.inputLimits;
 end

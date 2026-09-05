@@ -4,8 +4,8 @@ The public package contains only:
 
 - six configuration functions required by the active pipeline;
 - quadrotor plant and NMPC helper functions required at runtime;
-- the targeted SAC environment, action map, observation map, and warm-start
-  resize helper;
+- the targeted SAC environment, action map, 328D causal observation map,
+  feature/prediction-error helpers, and warm-start resize helper;
 - the episode-based continuous sync-3 checkpoint-stream entry point;
 - the five-family reference-feasibility screen and contract tests;
 - the approved speed/load-stratified reference sampler and bank builder;
@@ -13,8 +13,8 @@ The public package contains only:
 - the state-bound-gated top-five LQR selection-finalization workflow;
 - the fresh 2,700-episode LQR-only weakness-screen runners and workflow;
 - the frozen 0.29 MB `R_089` LQR artifact and SHA-256 provenance;
-- the locked C012 independent context-bank builder and audit, without the
-  generated 76 MB context MAT file;
+- the locked C012 causal-v2 independent context-bank builder and audit,
+  without the generated context MAT file;
 - manual GitHub Actions workflows for contract validation, probes and the
   staged checkpoint stream;
 - the bounded 210-solve C012 NMPC convergence/feasibility screen;

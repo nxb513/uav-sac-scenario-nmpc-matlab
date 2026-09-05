@@ -32,7 +32,7 @@ else
     resumeRoot = strtrim(getenv('SAC_RESUME_ROOT'));
     assert(~isempty(resumeRoot) && isfolder(resumeRoot), ...
         'SAC_RESUME_ROOT must point to an extracted previous artifact.');
-    [agent, savedAgentResult, resume] = load_latest_resume(resumeRoot);
+    [agent, savedAgentResult, resume] = load_latest_resume(resumeRoot, cfg);
 end
 cfg.training.executionEpisodeCeiling = ...
     cfg.training.candidateEpisodeCeiling;
@@ -171,7 +171,7 @@ summary = struct('SourceCount', sourceCount, ...
     'GrowthOnlyCount', numel(growthBank), 'CellCount', numel(cellIds));
 end
 
-function [agent, savedResult, resume] = load_latest_resume(root)
+function [agent, savedResult, resume] = load_latest_resume(root, cfg)
 checkpointFiles = dir(fullfile(root, '**', 'Agent*.mat'));
 episodes = -inf(numel(checkpointFiles), 1);
 for index = 1:numel(checkpointFiles)
@@ -190,6 +190,7 @@ for candidate = 1:numel(order)
     latestIndex = order(candidate);
     sourcePath = fullfile(checkpointFiles(latestIndex).folder, ...
         checkpointFiles(latestIndex).name);
+    validate_resume_contract(sourcePath, cfg);
     try
         artifact = load(sourcePath, 'saved_agent', 'savedAgentResult');
     catch
@@ -220,6 +221,7 @@ assert(~isempty(finalFiles), ...
 [~, latestIndex] = max([finalFiles.datenum]);
 sourcePath = fullfile(finalFiles(latestIndex).folder, ...
     finalFiles(latestIndex).name);
+validate_resume_contract(sourcePath, cfg);
 artifact = load(sourcePath, 'agent');
 assert(isfield(artifact, 'agent'), ...
     'Final checkpoint %s does not contain variable agent.', sourcePath);
@@ -232,6 +234,26 @@ resume = struct('Type', 'final_agent_new_training_result', ...
     'SourceGlobalEpisodeOffset', globalOffset, ...
     'SkippedNewerCheckpointCount', 0, ...
     'SourcePath', sourcePath);
+end
+
+function validate_resume_contract(checkpointPath, cfg)
+checkpointDirectory = fileparts(checkpointPath);
+candidateDirectories = {checkpointDirectory, ...
+    fileparts(checkpointDirectory)};
+configPath = '';
+for index = 1:numel(candidateDirectories)
+    candidate = fullfile(candidateDirectories{index}, 'config.mat');
+    if isfile(candidate)
+        configPath = candidate;
+        break;
+    end
+end
+assert(~isempty(configPath), ...
+    'Resume source lacks the config.mat required for contract validation.');
+artifact = load(configPath, 'cfg');
+assert(isfield(artifact, 'cfg'), ...
+    'Resume source config.mat does not contain cfg.');
+targeted_sac_validate_resume_config(artifact.cfg, cfg);
 end
 
 function [globalOffset, trainingEpisode] = source_offsets(checkpointPath)

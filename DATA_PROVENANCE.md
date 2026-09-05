@@ -15,6 +15,12 @@ auxiliary stratum and are not hard-failure labels. The deterministic builder
 is `experiments/build_targeted_c012_context_bank.m`; its audit is
 `experiments/audit_targeted_c012_context_bank.m`.
 
+Each causal-v2 context stores four real state samples, four applied inputs,
+the nominal one-step prediction residual and feature identity. The SAC reset
+extracts 221 reference columns for 200 actions and the terminal H=20 preview.
+The generated bank is not committed; its audit writes a SHA-256 sidecar beside
+the reconstructed MAT artifact.
+
 ## Publication boundary
 
 The repository contains no account token, license material, user directory,

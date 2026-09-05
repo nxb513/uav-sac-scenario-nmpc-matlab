@@ -21,7 +21,7 @@ jobs:
           products: Reinforcement_Learning_Toolbox Deep_Learning_Toolbox Optimization_Toolbox Control_System_Toolbox Statistics_and_Machine_Learning_Toolbox
           cache: true
 
-      - name: Validate reference and SAC contracts
+      - name: Validate plant, reference and causal-v2 contracts
         uses: matlab-actions/run-command@v3
         with:
-          command: addpath('tests/common'); addpath('tests/learning'); addpath('experiments'); run_targeted_reference_tests; run_targeted_bank_stratification_tests; run_targeted_sac_parameterization_tests; validate_predictive_divergence_implementation
+          command: addpath('tests/plant'); addpath('tests/common'); addpath('tests/learning'); addpath('experiments'); run_step1_plant_tests; run_targeted_reference_tests; run_targeted_bank_stratification_tests; run_targeted_sac_parameterization_tests; run_targeted_solver_acceptance_tests; run_research_contract_p0_tests; validate_predictive_divergence_implementation

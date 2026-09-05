@@ -28,8 +28,10 @@ constraintCross = state_constraint_crossing( ...
     X(:, futureStateIndices), nmpcCfg);
 saturationCross = saturated(inputIndices);
 safetyCross = ~finiteFuture | constraintCross | saturationCross;
+currentConstraintCross = state_constraint_crossing( ...
+    X(:, startStep), nmpcCfg);
 alreadyOutsideEnvelope = any(normalized(:, 1) >= 1) || ...
-    ~all(isfinite(X(:, startStep)));
+    ~all(isfinite(X(:, startStep))) || currentConstraintCross;
 
 growthFlags = energy(2:end) >= ...
     (1 + cfg.growth.minimumRelativeStep) .* energy(1:end-1);
@@ -78,6 +80,7 @@ label.CounterfactualDivergence = hardEvent;
 label.HardEvent = hardEvent;
 label.GrowthOnly = growthOnly;
 label.AlreadyOutsideEnvelope = alreadyOutsideEnvelope;
+label.AlreadyOutsideConstraint = currentConstraintCross;
 label.PreDivergenceEligible = hardEvent && ...
     timeToEvent >= cfg.selection.minimumLeadSteps && ...
     timeToEvent <= H;
@@ -96,11 +99,46 @@ label.MaximumAttitudeErrorDeg = finite_max(attitudeDeg(2:end));
 label.MaximumVelocityErrorMps = finite_max(velocity(2:end));
 label.MaximumBodyRateErrorRadps = finite_max(bodyRate(2:end));
 label.AbsoluteThresholdCrossing = any(absoluteCross);
+label.FirstHardEventType = first_event_type(firstHardEvent, ...
+    absoluteCross, saturationCross, constraintCross, ~finiteFuture);
+label.FirstTrackingEventOffset = first_offset(absoluteCross);
+label.FirstSaturationEventOffset = first_offset(saturationCross);
+label.FirstConstraintEventOffset = first_offset(constraintCross);
+label.FirstNonfiniteEventOffset = first_offset(~finiteFuture);
 label.SustainedGrowth = sustainedGrowth;
 label.SaturationForecast = any(saturationCross);
 label.ConstraintForecast = any(constraintCross);
 label.NonfiniteForecast = any(~finiteFuture);
 label.MinimumNormalizedActuatorMargin = actuatorMargin;
+end
+
+function offset = first_offset(mask)
+offset = find(mask, 1, 'first');
+if isempty(offset)
+    offset = Inf;
+end
+end
+
+function type = first_event_type(firstEvent, tracking, saturation, ...
+        constraint, nonfinite)
+if isempty(firstEvent)
+    type = "none";
+    return;
+end
+types = strings(0, 1);
+if tracking(firstEvent)
+    types(end + 1) = "tracking";
+end
+if saturation(firstEvent)
+    types(end + 1) = "saturation";
+end
+if constraint(firstEvent)
+    types(end + 1) = "constraint";
+end
+if nonfinite(firstEvent)
+    types(end + 1) = "nonfinite";
+end
+type = join(types, "+");
 end
 
 function crossing = state_constraint_crossing(X, nmpcCfg)

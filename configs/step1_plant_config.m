@@ -21,6 +21,7 @@ nom.alphaT = 1.0;
 nom.alphaTau = [1.0; 1.0; 1.0];
 nom.Jr = 2.8385e-5;
 nom.rotorGyroOmega = 0.0;
+nom.actuatorCapacityPolicy = 'fixed_nominal_hardware';
 nom.notes = ['Nominal values follow the 12-state quadrotor paper in step 1 ' ...
              'where available; generalized-input dynamics omit rotor-speed ' ...
              'allocation until mixer/actuator modeling is needed.'];

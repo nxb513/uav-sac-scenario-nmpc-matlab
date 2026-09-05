@@ -147,10 +147,15 @@ cfg.predictiveAnalysis.representativePositiveFractions = ...
 cfg.predictiveAnalysis.finalThresholdsLocked = true;
 cfg.predictiveAnalysis.lockedCandidateId = 'C012';
 
-cfg.specialistBank.outputSubfolder = ...
+cfg.specialistBank.legacyOutputSubfolder = ...
     'specialist_predivergence_context_bank_c012_v1';
+cfg.specialistBank.outputSubfolder = ...
+    'specialist_predivergence_context_bank_c012_causal_v2';
 cfg.specialistBank.status = ...
-    'approved_c012_hard_target_independent_training_bank';
+    'approved_c012_causal_v2_rebuild_required';
+cfg.specialistBank.featureVersion = 'causal_feature_v2';
+cfg.specialistBank.stateHistoryLength = 4;
+cfg.specialistBank.appliedInputHistoryLength = 4;
 cfg.specialistBank.sourceReplicatesPerCell = 20;
 cfg.specialistBank.sourceEpisodeCount = 2700;
 cfg.specialistBank.sourceStepCount = 400;

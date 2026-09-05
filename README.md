@@ -12,6 +12,10 @@ subject to review.
 - Input: `[T, tau_phi, tau_theta, tau_psi]`.
 - SAC action: six normalized NMPC weight groups, prediction horizon `N`, and
   control horizon `Nc`.
+- SAC observation: 328D `causal_feature_v2`, comprising four measured states,
+  four applied inputs, reference preview `k:k+20`, and a nominal one-step
+  prediction residual with wrapped Euler entries. Solve time, teacher
+  prediction and future disturbance realization are excluded.
 - Horizon candidates: `N in {5,10,15,20}` and
   `Nc in {2,5,10,15,20}`, constrained by `Nc <= N` (14 feasible pairs).
 - Scenario count: fixed at `M=5`.
@@ -24,6 +28,9 @@ subject to review.
   `2`, and five consecutive growth steps. Growth-only remains auxiliary.
 - Disturbance and parametric uncertainty are both active in the context bank.
 - NMPC solve time has zero reward weight.
+- Actuator command limits are fixed nominal hardware limits and do not grow
+  with mass uncertainty or payload shifts. The old arbitrary +/-20 m position
+  termination is removed; declared NMPC state bounds remain active.
 
 ## Approved reference envelope
 
@@ -50,7 +57,8 @@ is not silently imposed on other experiments.
 
 ## Run on GitHub Actions
 
-The obsolete low-speed context bank has been removed. Frozen LQR `R_089` and
+The obsolete low-speed and legacy noncausal context banks have been removed.
+Frozen LQR `R_089` and
 its SHA-256 provenance are committed as a small reproducibility input. C012
 was selected only from independent LQR validation run `33501219369`; the SAC
 workflow does not reuse those episodes. Instead, every long SAC job rebuilds
@@ -89,8 +97,9 @@ are never tuned on OOD/test data.
 3. Download and review the `lqr-retune-realized-coverage-v5-*` artifact.
 4. Open **Actions > MATLAB SAC-NMPC checkpoint stream** only after reviewing
    the locally measured context-bank coverage and the SAC runtime probe.
-5. For a fresh SAC run, select `fresh_start=true`. For a resume, enter the prior
-   run ID and select `fresh_start=false`.
+5. The first causal-v2 run must use `fresh_start=true`. Resume accepts only a
+   prior causal-v2 artifact with matching 328D contract metadata; legacy 31D
+   checkpoints/replay are rejected.
 6. Choose the candidate per-solve guard and run the workflow.
 7. The job rebuilds and audits C012 contexts before training. Download the
    `sac-nmpc-checkpoint-stream-*` artifact when the job ends.
@@ -116,7 +125,7 @@ rankings, frozen `selected_lqr.mat`, report and completion marker. SAC outputs
 are written under:
 
 ```text
-results/targeted_lqr_weak_rebuild_v1/specialist_sac_v1/
+results/targeted_lqr_weak_rebuild_v1/specialist_sac_causal_v2/
   checkpoint_stream_runs/run_<github-run-id>/
 ```
 
