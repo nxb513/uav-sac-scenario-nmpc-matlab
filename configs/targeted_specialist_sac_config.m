@@ -97,7 +97,7 @@ cfg.agent.targetSmoothFactor = 0.005;
 cfg.training.finalBudgetLocked = false;
 cfg.training.budgetUnit = 'episode';
 cfg.training.candidateEpisodeCeiling = 1500;
-cfg.training.checkpointFrequencyEpisodes = 50;
+cfg.training.checkpointFrequencyEpisodes = 10;
 cfg.training.candidateEvaluationEpisodes = [250, 500, 750, 1000, ...
     1250, 1500];
 cfg.training.maxEpisodes = 1000000;

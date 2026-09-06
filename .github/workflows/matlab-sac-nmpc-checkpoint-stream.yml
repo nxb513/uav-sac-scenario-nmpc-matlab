@@ -64,7 +64,7 @@ jobs:
         with:
           command: addpath('experiments'); build_targeted_c012_context_bank; audit_targeted_c012_context_bank; audit_targeted_sac_nmpc_contract
 
-      - name: Train continuously with 50-episode checkpoints
+      - name: Train continuously with periodic checkpoints
         timeout-minutes: 330
         uses: matlab-actions/run-command@v3
         with:
