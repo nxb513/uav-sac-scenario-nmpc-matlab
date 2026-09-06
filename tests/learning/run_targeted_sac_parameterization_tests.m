@@ -12,7 +12,7 @@ addpath(fullfile(projectRoot, 'src', 'rl'));
 cfg = targeted_specialist_sac_config();
 assert(strcmp(cfg.training.budgetUnit, 'episode'));
 assert(cfg.training.candidateEpisodeCeiling == 1500);
-assert(cfg.training.checkpointFrequencyEpisodes == 50);
+assert(cfg.training.checkpointFrequencyEpisodes == 10);
 assert(~isfield(cfg.training, 'transitionBudget'));
 
 [lowCfg, low] = rl_nmpc_action_to_config(-ones(8, 1), cfg);
