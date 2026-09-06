@@ -417,9 +417,5 @@ end
 
 function add_project_paths(projectRoot)
 addpath(fullfile(projectRoot, 'configs'));
-addpath(fullfile(projectRoot, 'src', 'common'));
-addpath(fullfile(projectRoot, 'src', 'plant'));
-addpath(fullfile(projectRoot, 'src', 'controllers', 'common'));
-addpath(fullfile(projectRoot, 'src', 'controllers', 'scenario_nmpc'));
-addpath(fullfile(projectRoot, 'src', 'rl'));
+addpath(genpath(fullfile(projectRoot, 'src')));
 end
