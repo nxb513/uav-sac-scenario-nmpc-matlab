@@ -20,8 +20,8 @@ cfg.nmpc.scenario.count = 5;
 cfg.nmpc.predictionHorizon = 10;
 cfg.nmpc.controlHorizon = 10;
 cfg.nmpc.rollout.disturbance = [];
-cfg.nmpc.solver.maxIterations = 35;
-cfg.nmpc.solver.maxFunctionEvaluations = 2500;
+cfg.nmpc.solver.maxIterations = 200;
+cfg.nmpc.solver.maxFunctionEvaluations = 6000;
 
 cfg.environment.sampleTime = targeted.sampleTime;
 cfg.environment.stepsPerEpisode = ...
