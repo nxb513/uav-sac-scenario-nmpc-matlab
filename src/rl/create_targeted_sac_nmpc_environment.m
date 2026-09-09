@@ -339,10 +339,13 @@ components = [sum(scaledError(1:3) .^ 2); ...
     min(solution.solveTime / cfg.observation.solveTimeScale, 10); ...
     double(constraintViolation) + sum(positiveViolation .^ 2); ...
     double(~solverAccepted)];
-reward = -dot(cfg.reward.weights, components);
-if isfield(cfg.reward, 'perStepClip') && ~isempty(cfg.reward.perStepClip)
-    reward = max(reward, -cfg.reward.perStepClip);
+trackingPenalty = dot(cfg.reward.weights(1:6), components(1:6));
+if isfield(cfg.reward, 'trackingPenaltyCap') && ...
+        ~isempty(cfg.reward.trackingPenaltyCap)
+    trackingPenalty = min(trackingPenalty, cfg.reward.trackingPenaltyCap);
 end
+terminalPenalty = dot(cfg.reward.weights(7:9), components(7:9));
+reward = -(trackingPenalty + terminalPenalty);
 end
 
 function ranges = actuator_ranges(theta)

@@ -84,13 +84,16 @@ cfg.reward.componentNames = {'position', 'attitude', 'velocity', ...
     'constraint', 'solverFailure'};
 cfg.reward.weights = [4.0; 2.0; 0.50; 0.25; 0.05; 0.02; ...
     0.0; 100.0; 200.0];
-% Per-step reward floor. Unbounded squared tracking error let a poorly tracking
-% (but non-terminating) episode accumulate rewards near -25000 over 200 steps,
-% which destabilised the SAC critic (Q0 went negative) and dominated the running
-% average. Clipping each step's reward to -perStepClip bounds an episode to about
-% -5000 and the discounted return to about perStepClip/(1-gamma), while leaving
-% normal good/moderate steps (about -0.05 to -5) untouched.
-cfg.reward.perStepClip = 25.0;
+% Per-step cap on the ACCUMULATING tracking penalty only (components 1-6:
+% position, attitude, velocity, body-rate, control, smoothness). Unbounded
+% squared tracking error let a poorly tracking but non-terminating episode
+% accumulate rewards near -25000 over 200 steps, destabilising the SAC critic.
+% Capping just this part bounds an episode near -6000 while leaving good/moderate
+% steps (tracking penalty about 0.1 to 12) untouched. The one-shot terminal
+% penalties (constraint 100, solver-failure 200) are NOT capped, so a failed
+% episode stays clearly worse than a good full episode - a total-reward clip
+% instead masked those penalties and removed the incentive to avoid failure.
+cfg.reward.trackingPenaltyCap = 30.0;
 
 cfg.agent.discountFactor = 0.99;
 cfg.agent.actorLearnRate = 3e-4;
