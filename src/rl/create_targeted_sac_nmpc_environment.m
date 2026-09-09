@@ -340,6 +340,9 @@ components = [sum(scaledError(1:3) .^ 2); ...
     double(constraintViolation) + sum(positiveViolation .^ 2); ...
     double(~solverAccepted)];
 reward = -dot(cfg.reward.weights, components);
+if isfield(cfg.reward, 'perStepClip') && ~isempty(cfg.reward.perStepClip)
+    reward = max(reward, -cfg.reward.perStepClip);
+end
 end
 
 function ranges = actuator_ranges(theta)

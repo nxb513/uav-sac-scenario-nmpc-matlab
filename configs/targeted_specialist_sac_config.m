@@ -84,6 +84,13 @@ cfg.reward.componentNames = {'position', 'attitude', 'velocity', ...
     'constraint', 'solverFailure'};
 cfg.reward.weights = [4.0; 2.0; 0.50; 0.25; 0.05; 0.02; ...
     0.0; 100.0; 200.0];
+% Per-step reward floor. Unbounded squared tracking error let a poorly tracking
+% (but non-terminating) episode accumulate rewards near -25000 over 200 steps,
+% which destabilised the SAC critic (Q0 went negative) and dominated the running
+% average. Clipping each step's reward to -perStepClip bounds an episode to about
+% -5000 and the discounted return to about perStepClip/(1-gamma), while leaving
+% normal good/moderate steps (about -0.05 to -5) untouched.
+cfg.reward.perStepClip = 25.0;
 
 cfg.agent.discountFactor = 0.99;
 cfg.agent.actorLearnRate = 3e-4;
