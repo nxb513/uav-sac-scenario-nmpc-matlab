@@ -36,9 +36,14 @@ switch family
     case 'vertical_circle'
         effectiveAcceleration = min(targetAcceleration, ...
             cfg.verticalAccelerationFractionLimit * 9.81);
-        radius = max(cfg.minimumGeometryScale, ...
-            targetPeakSpeed ^ 2 / effectiveAcceleration) * ...
-            geometryJitter;
+        % Realized centripetal accel = v^2 / radius. Apply geometry jitter but
+        % never let it shrink the radius below the cap-implied value, otherwise
+        % realized accel would exceed effectiveAcceleration and push the peak
+        % specific-force tilt past the declared cap (the +/-10% jitter used to
+        % silently violate it: jitter 0.9 -> accel 0.75g/0.9 = 0.83g -> 56 deg).
+        capRadius = targetPeakSpeed ^ 2 / effectiveAcceleration;
+        radius = max([cfg.minimumGeometryScale, capRadius, ...
+            capRadius * geometryJitter]);
         options.effectiveAcceleration = effectiveAcceleration;
         options.center = [uniform(-0.2, 0.2); ...
             radius + uniform(cfg.altitudeRange(1), cfg.altitudeRange(2))];
