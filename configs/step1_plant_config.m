@@ -13,7 +13,18 @@ cfg.inputOrder = {'T','tau_phi','tau_theta','tau_psi'};
 
 nom.g = 9.81;
 nom.m = 0.486;
-nom.J = diag([3.8278e-3, 3.8278e-3, 7.6566e-3]);
+% Published raw principal moments (see nom.notes). The raw values give
+% Jz - (Jx + Jy) = +1e-6 > 0, which marginally violates the rigid-body inertia
+% triangle inequality (Jz <= Jx + Jy). We apply the minimal Euclidean-nearest
+% physical-consistency correction J0 = Jraw + (d/3)*[+1;+1;-1], d = Jz-Jx-Jy,
+% which places J0 exactly on the planar (thin-body) boundary Jz = Jx + Jy. This
+% is a disclosed numerical-consistency correction, NOT a new measurement; the
+% shift is 3.3e-7 (~0.009% of Jx). See docs/notes/
+% d1_physical_validity_fix_recommendations_20260912.md and Wensing et al.,
+% IEEE RA-L 2018 (physically consistent inertial parameters).
+nom.Jraw = [3.8278e-3; 3.8278e-3; 7.6566e-3];
+nom.JconsistencyShift = (nom.Jraw(3) - nom.Jraw(1) - nom.Jraw(2)) / 3;
+nom.J = diag(nom.Jraw + nom.JconsistencyShift * [1; 1; -1]);
 nom.arm = 0.25;
 nom.Dv = [5.5670e-4; 5.5670e-4; 6.3540e-4];
 nom.Domega = [5.5670e-4; 5.5670e-4; 6.3540e-4];
