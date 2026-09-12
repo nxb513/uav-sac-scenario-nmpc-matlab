@@ -62,11 +62,13 @@ for ci = configIdx
             continue;
         end
         result = run_one_task(configs(ci), dc, refCfg, theta, dt, ...
-            selSteps, thresh);
+            selSteps, thresh, opts.caseBudgetSeconds);
         save(taskPath, 'result', '-v7');
-        fprintf('  [cfg%02d %s] viol=%d maxPos=%.3f meanSolve=%.2fs conv%%=%.0f\n', ...
-            ci, dc.groupId, result.episodeViolation, result.maxPositionM, ...
-            result.meanSolveTime, 100 * result.convergedFraction);
+        fprintf(['  [cfg%02d %s] viol=%d reason=%s steps=%d/%d maxPos=%.3f ' ...
+            'meanSolve=%.2fs conv%%=%.0f\n'], ci, dc.groupId, ...
+            result.episodeViolation, result.stopReason, result.stepsCompleted, ...
+            result.stepsRequested, result.maxPositionM, result.meanSolveTime, ...
+            100 * result.convergedFraction);
     end
 end
 fprintf('S3 shard complete. Task files in %s\n', outDir);
@@ -74,7 +76,7 @@ end
 
 % ------------------------------------------------------------------------
 function result = run_one_task(configEntry, dc, refCfg, theta, dt, ...
-        selSteps, thresh)
+        selSteps, thresh, caseBudget)
 cfg = configEntry.cfg;
 % Deterministic reference for this case.
 [Xref, ~] = d1_regenerate_reference(dc.family, dc.speed, dc.accel, dc.rep, ...
@@ -86,27 +88,58 @@ thetaPlant = quad_sample_uncertainty(plantCfg, 1, 'targeted', ...
     double(d1_case_seed([dc.groupId '|plant'])), 'lhs');
 thetaScenarios = quad_sample_uncertainty(plantCfg, cfg.scenario.count, ...
     'train', double(d1_case_seed([dc.groupId '|scen'])), 'lhs');
-disturbanceSpec = [];   % nominal process disturbance for selection stability
 
-x0 = Xref(:, 1);
-episode = scenario_nmpc_teacher_rollout(x0, Xref, thetaPlant, cfg, ...
-    thetaScenarios, selSteps, disturbanceSpec);
+% Bounded closed-loop teacher rollout with a per-case wall budget so a single
+% hard case cannot drag a shard past the job timeout: if the budget is exceeded
+% the case is stopped and recorded as a teacher failure (reason 'budget').
+X = nan(12, selSteps + 1);
+X(:, 1) = Xref(:, 1);
+solveTimes = zeros(1, selSteps);
+exitflags = zeros(1, selSteps);
+warmStart = nmpc_default_warm_start(cfg.plant.nominal, cfg.predictionHorizon);
+reason = 'complete';
+stepsDone = 0;
+caseClock = tic;
+for k = 1:selSteps
+    tNow = (k - 1) * dt;
+    Xwin = nmpc_reference_window(Xref, k, tNow, cfg);
+    sol = scenario_nmpc_solve(X(:, k), Xwin, thetaScenarios, cfg, warmStart);
+    solveTimes(k) = sol.solveTime;
+    exitflags(k) = sol.exitflag;
+    X(:, k + 1) = quad_step_rk4(tNow, X(:, k), sol.u0, dt, thetaPlant, []);
+    warmStart = nmpc_shift_sequence(sol.U, sol.U(:, end));
+    stepsDone = k;
+    if ~all(isfinite(X(:, k + 1)))
+        reason = 'nonfinite'; break;
+    end
+    if toc(caseClock) > caseBudget
+        reason = 'budget'; break;
+    end
+end
 
-[viol, maxErr] = episode_violation(episode.X, Xref, thresh);
+usedX = X(:, 1:stepsDone + 1);
+[viol, maxErr] = episode_violation(usedX, Xref, thresh);  % clips to min cols
+% A truncated case (budget/nonfinite before the full horizon) is a failure.
+if ~strcmp(reason, 'complete')
+    viol = true;
+end
 result = struct();
 result.groupId = dc.groupId;
 result.configLabel = configEntry.label;
 result.configIndex = configEntry.index;
 result.episodeViolation = viol;
+result.stopReason = reason;
+result.stepsCompleted = stepsDone;
+result.stepsRequested = selSteps;
 result.maxPositionM = maxErr.pos;
 result.maxAttitudeDeg = maxErr.att;
 result.maxVelocityMps = maxErr.vel;
 result.maxBodyRateRadps = maxErr.rate;
 result.cumulativeNormError = maxErr.cumNorm;
-result.meanSolveTime = mean(episode.solveTime);
-result.totalSolveTime = sum(episode.solveTime);
-result.convergedFraction = mean(episode.exitflag > 0);
-result.finite = all(isfinite(episode.X(:)));
+result.meanSolveTime = mean(solveTimes(1:max(stepsDone, 1)));
+result.totalSolveTime = sum(solveTimes(1:stepsDone));
+result.convergedFraction = mean(exitflags(1:max(stepsDone, 1)) > 0);
+result.finite = all(isfinite(usedX(:)));
 end
 
 % ------------------------------------------------------------------------
@@ -144,8 +177,11 @@ for pa = posAttScales
             cfg.predictionHorizon = N;
             cfg.controlHorizon = 5;               % Nc=5
             cfg.solver.algorithm = 'sqp';
-            cfg.solver.maxIterations = 200;
-            cfg.solver.maxFunctionEvaluations = 6000;
+            % Bounded so a single hard-case solve cannot run away (the wall
+            % guard only fires between iterations). 80 iters covers the ~67 seen
+            % on hard dev cases; frozen for all configs so the comparison is fair.
+            cfg.solver.maxIterations = 80;
+            cfg.solver.maxFunctionEvaluations = 1500;
             q = diag(base.weights.Q);
             q(1:6) = q(1:6) * pa;                 % position+attitude penalty
             cfg.weights.Q = diag(q);
@@ -219,6 +255,7 @@ opts = struct('configIndex', env_num('D1_CONFIG_INDEX', -1), ...
     'caseIndex', env_num('D1_CASE_INDEX', -1), ...
     'selectionSteps', env_num('D1_SELECTION_STEPS', 200), ...
     'maxWallSeconds', env_num('NMPC_MAX_WALL_SECONDS', 60), ...
+    'caseBudgetSeconds', env_num('D1_CASE_BUDGET_SECONDS', 2700), ...
     'resumeRoot', getenv_default('D1_RESUME_ROOT', ''));
 for k = 1:2:numel(varargin)
     opts.(varargin{k}) = varargin{k + 1};
