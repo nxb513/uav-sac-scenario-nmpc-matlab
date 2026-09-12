@@ -116,7 +116,10 @@ c = empty_case();
 c.family = family; c.speed = speed; c.accel = accel; c.rep = rep;
 c.groupId = sprintf('%s|v%g|a%g|r%d', family, speed, accel, rep);
 c.split = assign_split(c.groupId, splitEdges);
+c.optionSeed = double(d1_case_seed(c.groupId));
 try
+    % Per-case deterministic reference (matches d1_regenerate_reference).
+    rng(d1_case_seed(c.groupId), 'twister');
     options = quad_sample_targeted_reference_options(family, ref, speed, accel);
     if isfield(options, 'radius'); c.radius = options.radius;
     elseif isfield(options, 'amplitude'); c.radius = max(options.amplitude(:)); end
@@ -142,7 +145,8 @@ end
 
 function c = empty_case()
 c = struct('family', '', 'speed', NaN, 'accel', NaN, 'rep', NaN, ...
-    'groupId', '', 'split', '', 'isTeacherDev', false, 'radius', NaN, ...
+    'groupId', '', 'split', '', 'isTeacherDev', false, 'optionSeed', NaN, ...
+    'radius', NaN, ...
     'peakTiltDeg', NaN, 'peakInputFraction', NaN, 'peakBodyRate', NaN, ...
     'peakAccel', NaN, 'residualMax', NaN, 'stateBound', NaN, ...
     'finite', false, 'tier', '', 'reasons', '');

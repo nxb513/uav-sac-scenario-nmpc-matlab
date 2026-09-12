@@ -1,0 +1,128 @@
+name: D1 S3 teacher grid selection
+
+on:
+  workflow_dispatch:
+    inputs:
+      resume_run_id:
+        description: Optional prior run ID whose task artifacts to resume from
+        required: false
+        default: ""
+        type: string
+      solver_wall_seconds:
+        description: Per-solve wall guard (frozen resource limit)
+        required: true
+        default: "60"
+        type: choice
+        options: ["30", "60", "120"]
+      selection_steps:
+        description: Teacher-selection rollout length (frozen at 200; small = smoke)
+        required: true
+        default: "200"
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  teacher-grid:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [0, 1, 2, 3, 4, 5, 6, 7]
+        block: [0, 1, 2]
+    env:
+      D1_CONFIG_INDEX: ${{ matrix.config }}
+      D1_CASE_BLOCK: ${{ matrix.block }}
+      D1_NUM_BLOCKS: "3"
+      D1_SELECTION_STEPS: ${{ inputs.selection_steps }}
+      NMPC_MAX_WALL_SECONDS: ${{ inputs.solver_wall_seconds }}
+      D1_RESUME_ROOT: ${{ github.workspace }}/resume_input
+    steps:
+      - name: Check out research package
+        uses: actions/checkout@v6
+
+      - name: Download prior task files (resume)
+        if: ${{ inputs.resume_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: d1-teacher-grid-c${{ matrix.config }}b${{ matrix.block }}-${{ inputs.resume_run_id }}
+          path: resume_input/tasks
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.resume_run_id }}
+        continue-on-error: true
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: Optimization_Toolbox Control_System_Toolbox Statistics_and_Machine_Learning_Toolbox Parallel_Computing_Toolbox
+          cache: true
+
+      - name: Rebuild deterministic reference bank (S0)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); build_d1_reference_bank('save', true);
+
+      - name: Run teacher-grid shard (config x block)
+        timeout-minutes: 330
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); run_d1_teacher_grid;
+
+      - name: Upload task files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-teacher-grid-c${{ matrix.config }}b${{ matrix.block }}-${{ github.run_id }}
+          path: results/d1_teacher_grid/tasks/
+          if-no-files-found: warn
+          retention-days: 14
+
+  select:
+    needs: teacher-grid
+    if: ${{ always() }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out research package
+        uses: actions/checkout@v6
+
+      - name: Download all task artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: d1-teacher-grid-*-${{ github.run_id }}
+          path: all_tasks
+          merge-multiple: true
+
+      - name: Stage task files
+        run: |
+          mkdir -p results/d1_teacher_grid/tasks
+          find all_tasks -name 'cfg*_*.mat' -exec cp {} results/d1_teacher_grid/tasks/ \;
+          echo "staged $(ls results/d1_teacher_grid/tasks | wc -l) task files"
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: Optimization_Toolbox Control_System_Toolbox Statistics_and_Machine_Learning_Toolbox
+          cache: true
+
+      - name: Select frozen teacher g*
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath('experiments'); select_d1_teacher;
+
+      - name: Upload selection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-teacher-selection-${{ github.run_id }}
+          path: |
+            results/d1_teacher_grid/selected_teacher.mat
+            results/d1_teacher_grid/teacher_selection_report.md
+          if-no-files-found: warn
+          retention-days: 30
