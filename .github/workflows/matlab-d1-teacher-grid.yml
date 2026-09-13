@@ -20,9 +20,9 @@ on:
         default: "200"
         type: string
       case_budget_seconds:
-        description: Per-case wall budget; a case exceeding it is recorded as teacher-fail
+        description: Per-case wall SAFETY net (rarely fires with 1 case/shard); records teacher-fail
         required: true
-        default: "2700"
+        default: "18000"
         type: string
 
 permissions:
@@ -35,13 +35,14 @@ jobs:
     timeout-minutes: 350
     strategy:
       fail-fast: false
+      max-parallel: 20
       matrix:
         config: [0, 1, 2, 3, 4, 5, 6, 7]
-        block: [0, 1, 2, 3, 4, 5]
+        block: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     env:
       D1_CONFIG_INDEX: ${{ matrix.config }}
       D1_CASE_BLOCK: ${{ matrix.block }}
-      D1_NUM_BLOCKS: "6"
+      D1_NUM_BLOCKS: "24"
       D1_SELECTION_STEPS: ${{ inputs.selection_steps }}
       NMPC_MAX_WALL_SECONDS: ${{ inputs.solver_wall_seconds }}
       D1_CASE_BUDGET_SECONDS: ${{ inputs.case_budget_seconds }}

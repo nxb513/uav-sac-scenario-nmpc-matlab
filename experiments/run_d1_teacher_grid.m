@@ -89,9 +89,16 @@ thetaPlant = quad_sample_uncertainty(plantCfg, 1, 'targeted', ...
 thetaScenarios = quad_sample_uncertainty(plantCfg, cfg.scenario.count, ...
     'train', double(d1_case_seed([dc.groupId '|scen'])), 'lhs');
 
-% Bounded closed-loop teacher rollout with a per-case wall budget so a single
-% hard case cannot drag a shard past the job timeout: if the budget is exceeded
-% the case is stopped and recorded as a teacher failure (reason 'budget').
+% Closed-loop teacher rollout. The episode-violation label is a FIRST-PASSAGE
+% event: the registered success predicate fails at the first step that crosses
+% any registered threshold (position 0.10 m / attitude 5 deg / velocity 0.30 m/s
+% / body-rate 2 rad/s), with no recovery credit. So stopping at that first
+% crossing yields EXACTLY the same label as running the full 200 steps (it is not
+% an approximation, and 0.10 m is the registered threshold, not a new parameter).
+% A case that never crosses runs the full horizon and is a success. Extra stops:
+% non-finite state (numerical breakdown = failure) and a generous wall budget
+% (pure safety net against a rare stuck case; records a failure).
+refCols = size(Xref, 2);
 X = nan(12, selSteps + 1);
 X(:, 1) = Xref(:, 1);
 solveTimes = zeros(1, selSteps);
@@ -100,15 +107,9 @@ warmStart = nmpc_default_warm_start(cfg.plant.nominal, cfg.predictionHorizon);
 reason = 'complete';
 stepsDone = 0;
 caseClock = tic;
-refCols = size(Xref, 2);
 for k = 1:selSteps
-    % Stop BEFORE solving if the teacher has already lost tracking: a diverged
-    % state is both an episode violation already and the input that makes
-    % fmincon stall for a very long time (which the between-iteration wall guard
-    % cannot cap). Catching it here keeps every case bounded.
-    posErr = norm(X(1:3, k) - Xref(1:3, min(k, refCols)));
-    if ~all(isfinite(X(:, k))) || posErr > 2.0 || max(abs(X(:, k))) > 500
-        reason = 'diverged'; break;
+    if ~all(isfinite(X(:, k)))
+        reason = 'nonfinite'; break;
     end
     tNow = (k - 1) * dt;
     Xwin = nmpc_reference_window(Xref, k, tNow, cfg);
@@ -120,6 +121,13 @@ for k = 1:selSteps
     stepsDone = k;
     if ~all(isfinite(X(:, k + 1)))
         reason = 'nonfinite'; break;
+    end
+    e = X(:, k + 1) - Xref(:, min(k + 1, refCols));
+    if norm(e(1:3)) >= thresh.positionM || ...
+            rad2deg(norm(e(4:6))) >= thresh.attitudeDeg || ...
+            norm(e(7:9)) >= thresh.velocityMps || ...
+            norm(e(10:12)) >= thresh.bodyRateRadps
+        reason = 'violation'; break;   % registered predicate: first crossing decides
     end
     if toc(caseClock) > caseBudget
         reason = 'budget'; break;
@@ -186,13 +194,13 @@ for pa = posAttScales
             cfg.predictionHorizon = N;
             cfg.controlHorizon = 5;               % Nc=5
             cfg.solver.algorithm = 'sqp';
-            % Hard time bound per solve via MaxFunctionEvaluations (fmincon checks
-            % it after EVERY evaluation, unlike the between-iteration wall guard
-            % which can miss a stalled solve). ~400 evals ~= 12 s local / ~30 s on
-            % the 2-core CI runner; the local test showed tracking stays tight
-            % (posErr < 0.01) even under-converged. Frozen for all configs.
-            cfg.solver.maxIterations = 40;
-            cfg.solver.maxFunctionEvaluations = 400;
+            % Converged teacher (does not compromise quality): warm-started solves
+            % converge in ~40-67 iters, so maxIter=80 reaches the optimum, and
+            % MaxFunctionEvaluations=1500 hard-bounds each solve (~60 s on the
+            % 2-core CI runner) so none can run away. With 1-case-per-shard each
+            % case has the full 5.5 h slot; the divergence check stops lost cases.
+            cfg.solver.maxIterations = 80;
+            cfg.solver.maxFunctionEvaluations = 1500;
             q = diag(base.weights.Q);
             q(1:6) = q(1:6) * pa;                 % position+attitude penalty
             cfg.weights.Q = diag(q);
@@ -266,7 +274,7 @@ opts = struct('configIndex', env_num('D1_CONFIG_INDEX', -1), ...
     'caseIndex', env_num('D1_CASE_INDEX', -1), ...
     'selectionSteps', env_num('D1_SELECTION_STEPS', 200), ...
     'maxWallSeconds', env_num('NMPC_MAX_WALL_SECONDS', 60), ...
-    'caseBudgetSeconds', env_num('D1_CASE_BUDGET_SECONDS', 2700), ...
+    'caseBudgetSeconds', env_num('D1_CASE_BUDGET_SECONDS', 18000), ...
     'resumeRoot', getenv_default('D1_RESUME_ROOT', ''));
 for k = 1:2:numel(varargin)
     opts.(varargin{k}) = varargin{k + 1};
