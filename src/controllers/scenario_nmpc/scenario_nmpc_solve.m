@@ -17,13 +17,22 @@ thetaScenarios = thetaScenarios(:).';
 nominalTheta = cfg.plant.nominal;
 horizon = cfg.predictionHorizon;
 controlHorizon = nmpc_control_horizon(cfg);
+% The reference may be a plain 12-by-(N+1) state window (legacy) or a struct with
+% fields .X (state window) and .U (4-by-N input feedforward window) so the
+% control-deviation penalty can reference the flatness feedforward.
+if isstruct(reference)
+    uRefWindow = reference.U;
+    reference = reference.X;
+else
+    uRefWindow = [];
+end
 Xref = nmpc_prepare_reference(reference, horizon);
 Ucontrol0 = prepare_warm_start(nominalTheta, horizon, controlHorizon, warmStart);
 [lb, ub] = nmpc_input_bounds(nominalTheta, controlHorizon);
 z0 = min(max(Ucontrol0(:), lb), ub);
 
 objective = @(z) scenario_objective( ...
-    z, x0, Xref, thetaScenarios, cfg, previousInput);
+    z, x0, Xref, uRefWindow, thetaScenarios, cfg, previousInput);
 nonlcon = @(z) scenario_constraints(z, x0, thetaScenarios, cfg);
 if ~cfg.constraints.enableStateBounds || ~cfg.constraints.enforceScenarioStateBounds
     nonlcon = [];
@@ -123,7 +132,7 @@ Ucontrol0 = nmpc_saturate_sequence(U0, theta);
 end
 
 function cost = scenario_objective( ...
-        z, x0, Xref, thetaScenarios, cfg, previousInput)
+        z, x0, Xref, uRefWindow, thetaScenarios, cfg, previousInput)
 controlHorizon = nmpc_control_horizon(cfg);
 Ucontrol = reshape(z, 4, controlHorizon);
 U = nmpc_expand_control_sequence(Ucontrol, cfg.predictionHorizon);
@@ -144,7 +153,8 @@ for i = 1:scenarioCount
     try
         X = nmpc_rollout(x0, U, theta, cfg.sampleTime, ...
                          cfg.rollout.disturbance, cfg.rollout.startTime);
-        stepCost = nmpc_tracking_cost(X, U, Xref, theta, cfg, previousInput);
+        stepCost = nmpc_tracking_cost(X, U, Xref, theta, cfg, ...
+                                      previousInput, uRefWindow);
     catch
         stepCost = INVALID_ROLLOUT_PENALTY;
     end

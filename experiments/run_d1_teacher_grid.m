@@ -82,9 +82,9 @@ end
 function result = run_one_task(configEntry, dc, refCfg, theta, dt, ...
         selSteps, H, caseBudget)
 cfg = configEntry.cfg;
-% Deterministic reference for this case.
-[Xref, ~] = d1_regenerate_reference(dc.family, dc.speed, dc.accel, dc.rep, ...
-    refCfg, theta, dt, selSteps);
+% Deterministic reference for this case (Xref state + Uref flatness feedforward).
+[Xref, ~, ~, Uref] = d1_regenerate_reference(dc.family, dc.speed, dc.accel, ...
+    dc.rep, refCfg, theta, dt, selSteps);
 % Hidden plant theta (targeted envelope) + scenario thetas known to teacher.
 plantCfg = cfg.plant;
 plantCfg.uncertainty.targeted = targeted_uncertainty(plantCfg);
@@ -117,7 +117,9 @@ for k = 1:selSteps
     end
     tNow = (k - 1) * dt;
     Xwin = nmpc_reference_window(Xref, k, tNow, cfg);
-    sol = scenario_nmpc_solve(X(:, k), Xwin, thetaScenarios, cfg, warmStart);
+    Uwin = input_ref_window(Uref, k, cfg.predictionHorizon);
+    sol = scenario_nmpc_solve(X(:, k), struct('X', Xwin, 'U', Uwin), ...
+        thetaScenarios, cfg, warmStart);
     solveTimes(k) = sol.solveTime;
     exitflags(k) = sol.exitflag;
     X(:, k + 1) = quad_step_rk4(tNow, X(:, k), sol.u0, dt, thetaPlant, []);
@@ -217,6 +219,12 @@ for pa = posAttScales
             % case has the full 5.5 h slot; the divergence check stops lost cases.
             cfg.solver.maxIterations = 80;
             cfg.solver.maxFunctionEvaluations = 1500;
+            % Penalize control deviation from the time-varying flatness
+            % feedforward u_ref(t), not from constant hover: on aggressive
+            % (high-speed/high-accel) trajectories u_ref departs hover by up to
+            % ~40% of hover thrust, so a hover-referenced penalty would fight the
+            % necessary actuation and bias the input-penalty ranking axis.
+            cfg.weights.inputReference = 'feedforward';
             q = diag(base.weights.Q);
             q(1:6) = q(1:6) * pa;                 % position+attitude penalty
             cfg.weights.Q = diag(q);
@@ -325,4 +333,17 @@ end
 function v = finite_max(x)
 x = x(isfinite(x));
 if isempty(x); v = Inf; else; v = max(x); end
+end
+
+function Uwin = input_ref_window(Uref, stepIndex, predictionHorizon)
+% Feedforward input window aligned with the state reference window: input at
+% prediction step j (j=1..Np) uses the flatness feedforward at time t_{k+j-1},
+% i.e. Uref(:, k:k+Np-1), padded with the last column past the trajectory end.
+n = size(Uref, 2);
+lo = stepIndex;
+hi = min(stepIndex + predictionHorizon - 1, n);
+Uwin = Uref(:, lo:hi);
+if size(Uwin, 2) < predictionHorizon
+    Uwin = [Uwin, repmat(Uwin(:, end), 1, predictionHorizon - size(Uwin, 2))];
+end
 end

@@ -1,8 +1,18 @@
-function cost = nmpc_tracking_cost(X, U, Xref, theta, cfg, previousInput)
+function cost = nmpc_tracking_cost(X, U, Xref, theta, cfg, previousInput, ...
+        uRefWindow)
 %NMPC_TRACKING_COST Quadratic tracking, control-deviation and smoothness cost.
+%
+% The input-deviation term penalizes (u - uRef): with inputReference 'feedforward'
+% uRef is the time-varying differential-flatness feedforward uRefWindow (4-by-N,
+% one column per prediction step), so the teacher is penalized only for deviating
+% from the input needed to fly the trajectory, not for the necessary non-hover
+% actuation. 'hover'/'zero' keep uRef constant (legacy modes).
 
 if nargin < 6
     previousInput = [];
+end
+if nargin < 7
+    uRefWindow = [];
 end
 
 horizon = size(U, 2);
@@ -21,6 +31,17 @@ switch lower(cfg.weights.inputReference)
         uRef = repmat(quad_hover_input(theta), 1, horizon);
     case 'zero'
         uRef = zeros(4, horizon);
+    case 'feedforward'
+        if isempty(uRefWindow)
+            error('nmpc_tracking_cost:MissingFeedforward', ...
+                  ['inputReference ''feedforward'' requires the uRefWindow ' ...
+                   'argument (4-by-N flatness feedforward).']);
+        end
+        if size(uRefWindow, 1) ~= 4 || size(uRefWindow, 2) < horizon
+            error('nmpc_tracking_cost:BadFeedforward', ...
+                  'uRefWindow must be 4-by-M with M >= horizon.');
+        end
+        uRef = uRefWindow(:, 1:horizon);
     otherwise
         error('nmpc_tracking_cost:BadInputReference', ...
               'Unknown input reference mode: %s', cfg.weights.inputReference);
