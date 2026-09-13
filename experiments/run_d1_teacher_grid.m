@@ -219,12 +219,14 @@ for pa = posAttScales
             % case has the full 5.5 h slot; the divergence check stops lost cases.
             cfg.solver.maxIterations = 80;
             cfg.solver.maxFunctionEvaluations = 1500;
-            % Penalize control deviation from the time-varying flatness
-            % feedforward u_ref(t), not from constant hover: on aggressive
-            % (high-speed/high-accel) trajectories u_ref departs hover by up to
-            % ~40% of hover thrust, so a hover-referenced penalty would fight the
-            % necessary actuation and bias the input-penalty ranking axis.
-            cfg.weights.inputReference = 'feedforward';
+            % Input-deviation penalty references per-scenario hover (established,
+            % scenario-neutral choice). A feedforward-referenced variant
+            % ('feedforward', plumbed via the struct reference) is available but is
+            % NOT clearly better under plant uncertainty (the nominal flatness
+            % feedforward is not the true feedforward for the sampled plant; an A/B
+            % on an aggressive case was ~8% worse), so it is evaluated as an
+            % ABLATION rather than adopted as the main teacher objective.
+            cfg.weights.inputReference = 'hover';
             q = diag(base.weights.Q);
             q(1:6) = q(1:6) * pa;                 % position+attitude penalty
             cfg.weights.Q = diag(q);
