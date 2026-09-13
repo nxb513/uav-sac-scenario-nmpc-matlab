@@ -47,8 +47,11 @@ fprintf('configs=%s  cases=%s  selSteps=%d  wall=%ds  devN=%d\n', ...
     mat2str(configIdx - 1), mat2str(caseIdx), selSteps, ...
     opts.maxWallSeconds, numel(devCases));
 
-thresh = struct('positionM', 0.10, 'attitudeDeg', 5.0, ...
-    'velocityMps', 0.30, 'bodyRateRadps', 2.0);
+% Growth-based labeling: NO fixed error threshold. We run the FULL episode and
+% store the tracking-error trajectory; teacher quality = how well it CONTRACTS the
+% error (the same forward-growth quantity g that later defines the confidence c and
+% the blend weight alpha). H is the forward window = the intervention lead time.
+H = 20;
 
 for ci = configIdx
     cfg = configs(ci).cfg;
@@ -62,13 +65,14 @@ for ci = configIdx
             continue;
         end
         result = run_one_task(configs(ci), dc, refCfg, theta, dt, ...
-            selSteps, thresh, opts.caseBudgetSeconds);
+            selSteps, H, opts.caseBudgetSeconds);
         save(taskPath, 'result', '-v7');
-        fprintf(['  [cfg%02d %s] viol=%d reason=%s steps=%d/%d maxPos=%.3f ' ...
-            'meanSolve=%.2fs conv%%=%.0f\n'], ci, dc.groupId, ...
-            result.episodeViolation, result.stopReason, result.stepsCompleted, ...
-            result.stepsRequested, result.maxPositionM, result.meanSolveTime, ...
-            100 * result.convergedFraction);
+        fprintf(['  [cfg%02d %s] div=%d reason=%s steps=%d/%d rmsPos=%.3f ' ...
+            'maxPos=%.3f expFrac=%.2f meanSolve=%.2fs conv%%=%.0f\n'], ci, ...
+            dc.groupId, result.diverged, result.stopReason, ...
+            result.stepsCompleted, result.stepsRequested, result.rmsPositionM, ...
+            result.maxPositionM, result.expansionFraction, ...
+            result.meanSolveTime, 100 * result.convergedFraction);
     end
 end
 fprintf('S3 shard complete. Task files in %s\n', outDir);
@@ -76,7 +80,7 @@ end
 
 % ------------------------------------------------------------------------
 function result = run_one_task(configEntry, dc, refCfg, theta, dt, ...
-        selSteps, thresh, caseBudget)
+        selSteps, H, caseBudget)
 cfg = configEntry.cfg;
 % Deterministic reference for this case.
 [Xref, ~] = d1_regenerate_reference(dc.family, dc.speed, dc.accel, dc.rep, ...
@@ -89,16 +93,16 @@ thetaPlant = quad_sample_uncertainty(plantCfg, 1, 'targeted', ...
 thetaScenarios = quad_sample_uncertainty(plantCfg, cfg.scenario.count, ...
     'train', double(d1_case_seed([dc.groupId '|scen'])), 'lhs');
 
-% Closed-loop teacher rollout. The episode-violation label is a FIRST-PASSAGE
-% event: the registered success predicate fails at the first step that crosses
-% any registered threshold (position 0.10 m / attitude 5 deg / velocity 0.30 m/s
-% / body-rate 2 rad/s), with no recovery credit. So stopping at that first
-% crossing yields EXACTLY the same label as running the full 200 steps (it is not
-% an approximation, and 0.10 m is the registered threshold, not a new parameter).
-% A case that never crosses runs the full horizon and is a success. Extra stops:
-% non-finite state (numerical breakdown = failure) and a generous wall budget
-% (pure safety net against a rare stuck case; records a failure).
+% Closed-loop teacher rollout over the FULL horizon. NO first-crossing early
+% stop and NO fixed error threshold: teacher quality is measured by how the
+% tracking error EVOLVES (contracts vs diverges), so we need the whole
+% trajectory. We stop only on genuine numerical divergence (non-finite state)
+% or a gross-divergence anchor (position error beyond 5x the reference's own
+% extent, i.e. the vehicle has clearly left the arena; class-R compute saver,
+% not a success threshold), plus a wall-budget safety net.
 refCols = size(Xref, 2);
+refPosExtent = max(vecnorm(Xref(1:3, :), 2, 1));
+grossBound = max(5 * refPosExtent, 5.0);
 X = nan(12, selSteps + 1);
 X(:, 1) = Xref(:, 1);
 solveTimes = zeros(1, selSteps);
@@ -122,59 +126,71 @@ for k = 1:selSteps
     if ~all(isfinite(X(:, k + 1)))
         reason = 'nonfinite'; break;
     end
-    e = X(:, k + 1) - Xref(:, min(k + 1, refCols));
-    if norm(e(1:3)) >= thresh.positionM || ...
-            rad2deg(norm(e(4:6))) >= thresh.attitudeDeg || ...
-            norm(e(7:9)) >= thresh.velocityMps || ...
-            norm(e(10:12)) >= thresh.bodyRateRadps
-        reason = 'violation'; break;   % registered predicate: first crossing decides
+    if norm(X(1:3, k + 1) - Xref(1:3, min(k + 1, refCols))) > grossBound
+        reason = 'grossdiverge'; break;
     end
     if toc(caseClock) > caseBudget
         reason = 'budget'; break;
     end
 end
 
-usedX = X(:, 1:stepsDone + 1);
-[viol, maxErr] = episode_violation(usedX, Xref, thresh);  % clips to min cols
-% A truncated case (budget/nonfinite before the full horizon) is a failure.
-if ~strcmp(reason, 'complete')
-    viol = true;
+m = min(stepsDone + 1, refCols);        % clip both to the common length
+E = X(:, 1:m) - Xref(:, 1:m);
+result = build_result(configEntry, dc, E, H, reason, stepsDone, selSteps, ...
+    solveTimes, exitflags, grossBound);
 end
+
+% ------------------------------------------------------------------------
+function result = build_result(configEntry, dc, E, H, reason, stepsDone, ...
+        selSteps, solveTimes, exitflags, grossBound)
+% Descriptive error signals (per channel) + the forward-growth metric on the
+% position-error signal. The FULL error trajectory E is stored so the exact
+% growth quantity g, the confidence targets, and any error norm can be recomputed
+% OFFLINE without re-running the teacher (which is the expensive part).
+p = vecnorm(E(1:3, :), 2, 1);            % position-error signal (m)
+att = rad2deg(vecnorm(E(4:6, :), 2, 1)); % attitude error (deg, descriptive)
+vel = vecnorm(E(7:9, :), 2, 1);
+rate = vecnorm(E(10:12, :), 2, 1);
+nCols = numel(p);
+
+% Forward H-step growth of the position error: g_k = p(k+H)/p(k). A near-zero
+% floor (1% of the episode's peak error) keeps the ratio finite when the teacher
+% is momentarily perfect; it only affects the log-ratio scale, not the sign of
+% growth. These aggregates are provisional; the stored E allows the final
+% definition to be pinned at S7.
+if nCols > H
+    p0 = p(1:nCols - H); pH = p(1 + H:nCols);
+    floorv = max(1e-6, 0.01 * max(p));
+    expansionFraction = mean(pH > p0);                 % share of steps expanding
+    meanLogGrowth = mean(log(max(pH, floorv) ./ max(p0, floorv)));
+    maxGrowthFactor = max(pH ./ max(p0, floorv));
+else
+    expansionFraction = NaN; meanLogGrowth = NaN; maxGrowthFactor = NaN;
+end
+
 result = struct();
 result.groupId = dc.groupId;
 result.configLabel = configEntry.label;
 result.configIndex = configEntry.index;
-result.episodeViolation = viol;
 result.stopReason = reason;
+result.diverged = ~strcmp(reason, 'complete');   % nonfinite/grossdiverge/budget
 result.stepsCompleted = stepsDone;
 result.stepsRequested = selSteps;
-result.maxPositionM = maxErr.pos;
-result.maxAttitudeDeg = maxErr.att;
-result.maxVelocityMps = maxErr.vel;
-result.maxBodyRateRadps = maxErr.rate;
-result.cumulativeNormError = maxErr.cumNorm;
+result.maxPositionM = finite_max(p);
+result.rmsPositionM = sqrt(mean(p(isfinite(p)) .^ 2));
+result.maxAttitudeDeg = finite_max(att);
+result.maxVelocityMps = finite_max(vel);
+result.maxBodyRateRadps = finite_max(rate);
+result.expansionFraction = expansionFraction;
+result.meanLogGrowth = meanLogGrowth;
+result.maxGrowthFactor = maxGrowthFactor;
 result.meanSolveTime = mean(solveTimes(1:max(stepsDone, 1)));
 result.totalSolveTime = sum(solveTimes(1:stepsDone));
 result.convergedFraction = mean(exitflags(1:max(stepsDone, 1)) > 0);
-result.finite = all(isfinite(usedX(:)));
-end
-
-% ------------------------------------------------------------------------
-function [viol, maxErr] = episode_violation(X, Xref, thresh)
-n = min(size(X, 2), size(Xref, 2));
-E = X(:, 1:n) - Xref(:, 1:n);
-pos = vecnorm(E(1:3, :), 2, 1);
-att = rad2deg(vecnorm(E(4:6, :), 2, 1));
-vel = vecnorm(E(7:9, :), 2, 1);
-rate = vecnorm(E(10:12, :), 2, 1);
-cross = pos >= thresh.positionM | att >= thresh.attitudeDeg | ...
-    vel >= thresh.velocityMps | rate >= thresh.bodyRateRadps;
-viol = any(cross) || ~all(isfinite(X(:)));
-maxErr.pos = finite_max(pos); maxErr.att = finite_max(att);
-maxErr.vel = finite_max(vel); maxErr.rate = finite_max(rate);
-norm2 = (pos / thresh.positionM) .^ 2 + (att / thresh.attitudeDeg) .^ 2 + ...
-    (vel / thresh.velocityMps) .^ 2 + (rate / thresh.bodyRateRadps) .^ 2;
-maxErr.cumNorm = sum(norm2(isfinite(norm2)));
+result.finite = all(isfinite(E(:)));
+result.grossBound = grossBound;
+result.windowH = H;
+result.errorTrajectory = E;      % 12 x (stepsDone+1) full tracking error
 end
 
 % ------------------------------------------------------------------------
