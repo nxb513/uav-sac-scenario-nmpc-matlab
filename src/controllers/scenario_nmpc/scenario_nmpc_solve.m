@@ -130,12 +130,28 @@ U = nmpc_expand_control_sequence(Ucontrol, cfg.predictionHorizon);
 scenarioCount = numel(thetaScenarios);
 cost = 0.0;
 
+% Numerical barrier for a candidate input whose predicted rollout leaves the
+% valid attitude chart (ZYX Euler singularity at |pitch| = 90 deg) or otherwise
+% diverges to a non-finite state. Returning a dominating finite cost makes the
+% sqp solver treat the probe point as infeasible and step away, instead of the
+% plant model throwing and aborting the whole solve. The optimum is invariant to
+% the barrier magnitude provided it exceeds any attainable feasible cost, so this
+% is a class-R numerical constant, not a scientific/tunable parameter.
+INVALID_ROLLOUT_PENALTY = 1e12;
+
 for i = 1:scenarioCount
     theta = thetaScenarios(i);
-    X = nmpc_rollout(x0, U, theta, cfg.sampleTime, ...
-                     cfg.rollout.disturbance, cfg.rollout.startTime);
-    cost = cost + nmpc_tracking_cost( ...
-        X, U, Xref, theta, cfg, previousInput);
+    try
+        X = nmpc_rollout(x0, U, theta, cfg.sampleTime, ...
+                         cfg.rollout.disturbance, cfg.rollout.startTime);
+        stepCost = nmpc_tracking_cost(X, U, Xref, theta, cfg, previousInput);
+    catch
+        stepCost = INVALID_ROLLOUT_PENALTY;
+    end
+    if ~isfinite(stepCost)
+        stepCost = INVALID_ROLLOUT_PENALTY;
+    end
+    cost = cost + stepCost;
 end
 
 cost = cost / scenarioCount;
@@ -166,9 +182,15 @@ scenarioCount = numel(thetaScenarios);
 c = [];
 
 for i = 1:scenarioCount
-    X = nmpc_rollout(x0, U, thetaScenarios(i), cfg.sampleTime, ...
-                     cfg.rollout.disturbance, cfg.rollout.startTime);
-    c = [c; nmpc_state_bound_violations(X, cfg)]; %#ok<AGROW>
+    try
+        X = nmpc_rollout(x0, U, thetaScenarios(i), cfg.sampleTime, ...
+                         cfg.rollout.disturbance, cfg.rollout.startTime);
+        c = [c; nmpc_state_bound_violations(X, cfg)]; %#ok<AGROW>
+    catch
+        % Predicted rollout left the valid attitude chart: mark strongly
+        % infeasible so the solver rejects this probe point.
+        c = [c; 1e6]; %#ok<AGROW>
+    end
 end
 
 ceq = [];
@@ -179,9 +201,15 @@ scenarioCount = numel(thetaScenarios);
 XpredScenarios = zeros(12, cfg.predictionHorizon + 1, scenarioCount);
 
 for i = 1:scenarioCount
-    XpredScenarios(:, :, i) = nmpc_rollout(x0, U, thetaScenarios(i), ...
-                                           cfg.sampleTime, ...
-                                           cfg.rollout.disturbance, ...
-                                           cfg.rollout.startTime);
+    try
+        XpredScenarios(:, :, i) = nmpc_rollout(x0, U, thetaScenarios(i), ...
+                                               cfg.sampleTime, ...
+                                               cfg.rollout.disturbance, ...
+                                               cfg.rollout.startTime);
+    catch
+        % A selected input that still leaves the valid chart is flagged by
+        % NaN, so finiteSolution below marks the solution infeasible.
+        XpredScenarios(:, :, i) = NaN;
+    end
 end
 end
