@@ -100,7 +100,16 @@ warmStart = nmpc_default_warm_start(cfg.plant.nominal, cfg.predictionHorizon);
 reason = 'complete';
 stepsDone = 0;
 caseClock = tic;
+refCols = size(Xref, 2);
 for k = 1:selSteps
+    % Stop BEFORE solving if the teacher has already lost tracking: a diverged
+    % state is both an episode violation already and the input that makes
+    % fmincon stall for a very long time (which the between-iteration wall guard
+    % cannot cap). Catching it here keeps every case bounded.
+    posErr = norm(X(1:3, k) - Xref(1:3, min(k, refCols)));
+    if ~all(isfinite(X(:, k))) || posErr > 2.0 || max(abs(X(:, k))) > 500
+        reason = 'diverged'; break;
+    end
     tNow = (k - 1) * dt;
     Xwin = nmpc_reference_window(Xref, k, tNow, cfg);
     sol = scenario_nmpc_solve(X(:, k), Xwin, thetaScenarios, cfg, warmStart);
@@ -177,11 +186,13 @@ for pa = posAttScales
             cfg.predictionHorizon = N;
             cfg.controlHorizon = 5;               % Nc=5
             cfg.solver.algorithm = 'sqp';
-            % Bounded so a single hard-case solve cannot run away (the wall
-            % guard only fires between iterations). 80 iters covers the ~67 seen
-            % on hard dev cases; frozen for all configs so the comparison is fair.
-            cfg.solver.maxIterations = 80;
-            cfg.solver.maxFunctionEvaluations = 1500;
+            % Hard time bound per solve via MaxFunctionEvaluations (fmincon checks
+            % it after EVERY evaluation, unlike the between-iteration wall guard
+            % which can miss a stalled solve). ~400 evals ~= 12 s local / ~30 s on
+            % the 2-core CI runner; the local test showed tracking stays tight
+            % (posErr < 0.01) even under-converged. Frozen for all configs.
+            cfg.solver.maxIterations = 40;
+            cfg.solver.maxFunctionEvaluations = 400;
             q = diag(base.weights.Q);
             q(1:6) = q(1:6) * pa;                 % position+attitude penalty
             cfg.weights.Q = diag(q);
