@@ -175,7 +175,14 @@ result.groupId = dc.groupId;
 result.configLabel = configEntry.label;
 result.configIndex = configEntry.index;
 result.stopReason = reason;
-result.diverged = ~strcmp(reason, 'complete');   % nonfinite/grossdiverge/budget
+% TRUE divergence = the error blew up (non-finite state or gross-divergence
+% anchor). A wall-budget stop is a COMPUTE limit, not a divergence: the tracking
+% so far was fine, so it is recorded separately and must NOT be counted as a
+% teacher failure (this keeps a long episode from being corrupted by a slow
+% shard timing out).
+result.diverged = strcmp(reason, 'nonfinite') || strcmp(reason, 'grossdiverge');
+result.budgetStopped = strcmp(reason, 'budget');
+result.complete = strcmp(reason, 'complete');
 result.stepsCompleted = stepsDone;
 result.stepsRequested = selSteps;
 result.maxPositionM = finite_max(p);

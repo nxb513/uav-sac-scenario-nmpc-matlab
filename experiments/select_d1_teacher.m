@@ -29,11 +29,11 @@ results = [results{:}];
 configIdx = unique([results.configIndex]);
 nExpectedCases = numel(unique({results.groupId}));
 agg = struct('index', {}, 'label', {}, 'nCases', {}, 'divergenceRate', {}, ...
-    'meanLogGrowth', {}, 'meanRmsPos', {}, 'meanExpansionFraction', {}, ...
-    'totalSolveTime', {}, 'convergedFraction', {});
+    'budgetRate', {}, 'meanLogGrowth', {}, 'meanRmsPos', {}, ...
+    'meanExpansionFraction', {}, 'totalSolveTime', {}, 'convergedFraction', {});
 for c = configIdx
     sub = results([results.configIndex] == c);
-    nd = sub(~[sub.diverged]);                   % cleanly-tracked (bounded) cases
+    nd = sub(~[sub.diverged]);                   % bounded cases (incl budget-stopped)
     if isempty(nd)
         mlg = Inf; mrp = Inf; mef = Inf;
     else
@@ -44,6 +44,7 @@ for c = configIdx
     agg(end + 1) = struct('index', c, 'label', sub(1).configLabel, ...
         'nCases', numel(sub), ...
         'divergenceRate', mean([sub.diverged]), ...
+        'budgetRate', mean(field_or_false(sub, 'budgetStopped')), ...
         'meanLogGrowth', mlg, 'meanRmsPos', mrp, 'meanExpansionFraction', mef, ...
         'totalSolveTime', sum([sub.totalSolveTime]), ...
         'convergedFraction', mean([sub.convergedFraction])); %#ok<AGROW>
@@ -58,15 +59,16 @@ for c = configIdx
     end
 end
 
-% argmin: divergence rate (does the error stay bounded, not blow up) -> RMS
-% position error (how tightly it tracks) -> total solve time. This "bounded and
-% small" ranking is the robust reading of "contracts best" and, unlike the raw
-% forward log-growth, is not polluted by the healthy startup transient (the error
-% grows from an exact initial condition up to steady state). The fine 20-step
-% forward-growth quantity g (for the confidence c and blend alpha) is pinned at
-% S7 on the stored trajectories, where the transient is handled explicitly.
-key = [ [agg.divergenceRate].', [agg.meanRmsPos].', [agg.totalSolveTime].' ];
-[~, order] = sortrows(key, [1 2 3]);
+% argmin: TRUE divergence rate (error blew up) -> budget-stop rate (couldn't
+% finish in the wall budget; a practicality penalty kept below divergence) -> RMS
+% position error (how tightly it tracks) -> total solve time. "Bounded and small"
+% is the robust reading of "contracts best"; budget-stops are separated from
+% divergence so a long episode is not corrupted by a slow shard timing out. The
+% fine 20-step forward-growth g (for the confidence c and blend alpha) is pinned
+% at S7 on the stored trajectories, where the startup transient is handled.
+key = [ [agg.divergenceRate].', [agg.budgetRate].', ...
+        [agg.meanRmsPos].', [agg.totalSolveTime].' ];
+[~, order] = sortrows(key, [1 2 3 4]);
 best = agg(order(1));
 
 selection = struct();
@@ -84,14 +86,14 @@ save(fullfile(outDir, 'selected_teacher.mat'), 'selection');
 write_report(fullfile(outDir, 'teacher_selection_report.md'), selection, agg(order));
 
 fprintf('\n== S3 teacher selection (growth-based) ==\n');
-fprintf('%-24s %6s %9s %8s %6s %6s\n', 'config', 'div%', 'logGrow', ...
-    'rmsPos', 'exp%', 'conv%');
+fprintf('%-24s %6s %6s %8s %6s %6s\n', 'config', 'div%', 'bud%', ...
+    'rmsPos', 'conv%', 'nCase');
 for i = 1:numel(order)
     a = agg(order(i));
     marker = ''; if a.index == best.index; marker = '  <== g*'; end
-    fprintf('%-24s %6.1f %9.3f %8.3f %6.0f %6.0f%s\n', a.label, ...
-        100 * a.divergenceRate, a.meanLogGrowth, a.meanRmsPos, ...
-        100 * a.meanExpansionFraction, 100 * a.convergedFraction, marker);
+    fprintf('%-24s %6.1f %6.1f %8.3f %6.0f %6d%s\n', a.label, ...
+        100 * a.divergenceRate, 100 * a.budgetRate, a.meanRmsPos, ...
+        100 * a.convergedFraction, a.nCases, marker);
 end
 fprintf(['\nFROZEN teacher g* = %s (index %d): divergence %.1f%%, ' ...
     'mean log-growth %.3f over %d dev cases.\n'], best.label, best.index, ...
@@ -125,17 +127,17 @@ fprintf(fid, ['Frozen g* = **%s** (index %d): divergence %.1f%%, mean ' ...
     'log-growth %.3f over %d dev cases.\n\n'], selection.selectedLabel, ...
     selection.selectedIndex, 100 * selection.divergenceRate, ...
     selection.meanLogGrowth, selection.nCases);
-fprintf(fid, ['Ranking key: divergence rate (error stays bounded), then RMS ' ...
-    'position error (tracking tightness), then solve time. logGrowth/exp%% are ' ...
-    'reported for reference but include the startup transient; the fine 20-step ' ...
+fprintf(fid, ['Ranking key: TRUE divergence rate (error blew up) -> budget-stop ' ...
+    'rate (ran out of wall budget; separated from divergence so a slow shard does ' ...
+    'not corrupt selection) -> RMS position error -> solve time. The fine 20-step ' ...
     'forward-growth g is pinned at S7 on the stored trajectories.\n\n']);
-fprintf(fid, ['| rank | config | diverge%% | logGrowth | rmsPos(m) | exp%% | conv%% |\n']);
+fprintf(fid, ['| rank | config | diverge%% | budget%% | rmsPos(m) | conv%% | nCase |\n']);
 fprintf(fid, '|---|---|---|---|---|---|---|\n');
 for i = 1:numel(ranked)
     a = ranked(i);
-    fprintf(fid, '| %d | %s | %.1f | %.3f | %.3f | %.0f | %.0f |\n', i, a.label, ...
-        100 * a.divergenceRate, a.meanLogGrowth, a.meanRmsPos, ...
-        100 * a.meanExpansionFraction, 100 * a.convergedFraction);
+    fprintf(fid, '| %d | %s | %.1f | %.1f | %.3f | %.0f | %d |\n', i, a.label, ...
+        100 * a.divergenceRate, 100 * a.budgetRate, a.meanRmsPos, ...
+        100 * a.convergedFraction, a.nCases);
 end
 fclose(fid);
 end
@@ -147,6 +149,17 @@ end
 
 function s = getenv_default(name, default)
 s = getenv(name); if isempty(s); s = default; end
+end
+
+function v = field_or_false(structArray, name)
+% Vector of a logical field, defaulting missing entries to false (back-compat
+% with task files written before the field existed).
+v = false(1, numel(structArray));
+for i = 1:numel(structArray)
+    if isfield(structArray(i), name) && ~isempty(structArray(i).(name))
+        v(i) = logical(structArray(i).(name));
+    end
+end
 end
 
 function add_project_paths()
