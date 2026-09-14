@@ -28,10 +28,7 @@ xref_fun = @(t) [r*cos(wref*t); r*sin(wref*t); z0; 0; 0; 0; ...
     -r*wref*sin(wref*t); r*wref*cos(wref*t); 0; 0; 0; 0];
 
 % Bryson weights (initial Q0,R0; SAC would override W at runtime).
-eAllow = [0.10;0.10;0.10; deg2rad(5)*[1;1;1]; 0.30;0.30;0.30; 2;2;2];
-duAllow = [P.m*P.g; 0.5; 0.5; 0.25];
-Q0 = diag(1 ./ eAllow.^2); R0 = diag(1 ./ duAllow.^2);
-W0 = blkdiag(Q0, R0);
+[Q0, R0] = bryson_weights(P);
 
 % ---- closed-loop rollout -----------------------------------------------------
 x = xref_fun(0); x(1) = x(1) + 0.5; x(3) = x(3) - 0.3;   % start off-reference
@@ -44,18 +41,14 @@ for k = 1:N_STEPS
     % runtime Q,R retune halfway (proves no rebuild needed) --------------------
     if k == retuneStep
         W = blkdiag(Q0*3.0, R0*0.5);
-        for s = 0:N-1, solver.cost_set(s, 'W', W); end
-        solver.cost_set(N, 'W', Q0*3.0);
-    elseif k == 1
-        for s = 0:N-1, solver.cost_set(s, 'W', W0); end
-        solver.cost_set(N, 'W', Q0);
+        for s = 0:N-1, solver.set('cost_W', W, s); end
     end
     % per-stage references over the horizon -----------------------------------
     for s = 0:N-1
         yref = [xref_fun(t + s*Ts); uhover];
-        solver.cost_set(s, 'yref', yref);
+        solver.set('cost_y_ref', yref, s);
     end
-    solver.cost_set(N, 'yref', xref_fun(t + N*Ts));
+    solver.set('cost_y_ref_e', xref_fun(t + N*Ts));
     solver.set('constr_x0', x);
     tic; solver.solve(); solveMs(k) = 1000*toc;
     if solver.get('status') == 0, okCount = okCount + 1; end
@@ -80,6 +73,13 @@ fprintf('D1_TEACHER_VERIFY_DONE\n');
 end
 
 % =============================================================================
+function [Q0, R0] = bryson_weights(P)
+eAllow = [0.10;0.10;0.10; deg2rad(5)*[1;1;1]; 0.30;0.30;0.30; 2;2;2];
+duAllow = [P.m*P.g; 0.5; 0.5; 0.25];
+Q0 = diag(1 ./ eAllow.^2);
+R0 = diag(1 ./ duAllow.^2);
+end
+
 function P = plant_params()
 P.g = 9.81; P.m = 0.486;
 Jraw = [3.8278e-3; 3.8278e-3; 7.6566e-3];
@@ -125,9 +125,10 @@ ocp.model = model;
 ocp.solver_options.N_horizon = N;
 ocp.solver_options.tf = N*Ts;
 
+[Q0, R0] = bryson_weights(P);
 ocp.cost.cost_type = 'LINEAR_LS';
 ocp.cost.cost_type_e = 'LINEAR_LS';
-ocp.cost.W = eye(ny); ocp.cost.W_e = eye(nx);       % overwritten at runtime
+ocp.cost.W = blkdiag(Q0, R0); ocp.cost.W_e = Q0;    % stages overwritten at runtime
 Vx = zeros(ny,nx); Vx(1:nx,1:nx) = eye(nx);
 Vu = zeros(ny,nu); Vu(nx+1:end,1:nu) = eye(nu);
 ocp.cost.Vx = Vx; ocp.cost.Vu = Vu; ocp.cost.Vx_e = eye(nx);
