@@ -12,6 +12,16 @@ on:
         required: true
         default: "300"
         type: string
+      steps:
+        description: Rollout steps per case (frozen 1000; small = quick self-check)
+        required: true
+        default: "1000"
+        type: string
+      cases_per_eval:
+        description: Cases per SAC evaluation (frozen 20; small = quick self-check)
+        required: true
+        default: "20"
+        type: string
       resume_run_id:
         description: Prior run id to resume checkpoints from (empty = fresh)
         required: false
@@ -30,6 +40,8 @@ jobs:
     env:
       D1_SEED: ${{ matrix.seed }}
       D1_WALL_SECONDS: ${{ inputs.wall_seconds }}
+      D1_STEPS: ${{ inputs.steps }}
+      D1_CASES_PER_EVAL: ${{ inputs.cases_per_eval }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:
       - name: Check out research package

@@ -23,11 +23,12 @@ if ~isfolder(cfg.runDir), mkdir(cfg.runDir); end
 rng(cfg.seed, 'twister');
 
 % ---- fixed components (built once) ------------------------------------------
-teacher = d1_teacher_build_solver(cfg);
+scen = sample_scenarios(cfg);               % M=5 uncertain plant realizations
+teacher = d1_teacher_build_solver(cfg, scen);
 lqr = build_lqr(cfg);                       % K, P (Bryson LQR + Riccati)
 cases = generate_teacher_dev_cases(cfg);    % ~120 cases, 1000-step references
-fprintf('built teacher(acados) + LQR(P minEig=%.4g) + %d teacher-dev cases\n', ...
-    min(eig(lqr.P)), numel(cases));
+fprintf('built teacher(acados M=%d Nc=%d) + LQR(P minEig=%.4g) + %d cases\n', ...
+    cfg.M, cfg.Nc, min(eig(lqr.P)), numel(cases));
 
 % ---- init or resume learners ------------------------------------------------
 ckptPath = fullfile(cfg.runDir, sprintf('checkpoint_seed%d.mat', cfg.seed));
@@ -82,6 +83,7 @@ cfg.runDir = getenv_str('D1_RUN_DIR', fullfile('results','d1_joint', ...
 cfg.wallSeconds = getenv_num('D1_WALL_SECONDS', 300);
 cfg.resume = strcmp(getenv_str('D1_RESUME','0'),'1');
 cfg.Ts = 0.05; cfg.N = 20; cfg.Nc = 5; cfg.H = 20; cfg.Qf = 0; cfg.dU = 0;
+cfg.M = 5;                                          % robust scenarios (frozen)
 cfg.stepsPerCase = getenv_num('D1_STEPS', 1000);
 cfg.casesPerEval = getenv_num('D1_CASES_PER_EVAL', 20);
 cfg.plant = d1_joint_plant_params();
@@ -173,10 +175,30 @@ r = diag(R0); r(1)=r(1)*mult(5); r(2:4)=r(2:4)*mult(6);
 Q = diag(q); R = diag(r);
 end
 
+function scen = sample_scenarios(cfg)
+% M uncertain plant realizations; scenario 1 = nominal, rest perturbed by +/-rho
+% (step1_plant_config train uncertainty). Deterministic given the seed rng.
+nom = cfg.plant.nominal;
+rho = step1_plant_config().uncertainty.train.rho;   % 14x1
+Jnom = diag(nom.J);
+scen = struct('m',{},'Jd',{},'Dv',{},'Domega',{},'alphaT',{},'alphaTau',{});
+for i = 1:cfg.M
+    if i==1, xi = zeros(14,1); else, xi = 2*rand(14,1)-1; end
+    f = 1 + xi.*rho;
+    scen(i).m = nom.m*f(1);
+    scen(i).Jd = Jnom.*f(2:4);
+    scen(i).Dv = nom.Dv(:).*f(5:7);
+    scen(i).Domega = nom.Domega(:).*f(8:10);
+    scen(i).alphaT = nom.alphaT*f(11);
+    scen(i).alphaTau = nom.alphaTau(:).*f(12:14);
+end
+end
+
 function set_teacher_weights(solver, Q, R, cfg)
-W = blkdiag(Q, R);
+Wblk = repmat({Q/cfg.M}, 1, cfg.M); Wblk{end+1} = R;
+W = blkdiag(Wblk{:});                                 % (M*12+4) x (M*12+4)
 for s = 0:cfg.N-1, solver.set('cost_W', W, s); end
-% terminal weight kept at build-time Q0 (Qf=0; terminal retune not critical).
+% terminal weight kept at build-time (Qf=0; terminal retune not critical).
 end
 
 % ---- paired NMPC + LQR rollout on one case ---------------------------------
@@ -186,21 +208,23 @@ Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
 uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
 
 % independent plant copies, same initial condition
-xN = Xref(:,1); xL = Xref(:,1);
+M = cfg.M;
+xN = Xref(:,1); xL = Xref(:,1); uprev = uh;
 stateHist = repmat(xN,1,4); inputHist = repmat(uh,1,4);
 posErrN = zeros(T,1); duAcc = 0; okN = 0; cViol = 0; prevU = uh;
 EL = zeros(12, T+1); EL(:,1) = xL - Xref(:,1);       % LQR error traj for c_L
 
 for k = 1:T
-    % ---- NMPC teacher branch ------------------------------------------------
+    % ---- NMPC teacher branch (augmented M-scenario state, delta-u) ----------
     for s = 0:N-1
-        teacher.set('cost_y_ref', [Xref(:,k+s); uh], s);
+        teacher.set('cost_y_ref', [repmat(Xref(:,k+s),M,1); uh], s);
     end
-    teacher.set('cost_y_ref_e', Xref(:,k+N));
-    teacher.set('constr_x0', xN);
+    teacher.set('cost_y_ref_e', repmat(Xref(:,k+N),M,1));
+    teacher.set('constr_x0', [repmat(xN,M,1); uprev]);
     teacher.solve();
     okN = okN + (teacher.get('status')==0);
-    uN = teacher.get('u', 0);
+    uN = uprev + teacher.get('u', 0);                % u = u_prev + du0
+    uprev = uN;
     % nominal one-step prediction (for surrogate residual feature)
     xNnom = quad_step_rk4(0, xN, uN, Ts, theta, []); %#ok<NASGU>
     % streaming surrogate sample: (feature, u_NMPC) ---------------------------
