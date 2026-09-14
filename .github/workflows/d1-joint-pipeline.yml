@@ -1,0 +1,112 @@
+name: D1 joint pipeline (5 seeds)
+
+# ONE integrated task per seed: SAC tunes NMPC Q,R -> acados teacher + paired LQR
+# -> streaming surrogate -> contraction -> checkpoint. Open-ended (runs until
+# wall_seconds, checkpoints, resume to continue). 5 independent seeds in parallel.
+
+on:
+  workflow_dispatch:
+    inputs:
+      wall_seconds:
+        description: SAC wall-time budget per job (resume to continue)
+        required: true
+        default: "300"
+        type: string
+      resume_run_id:
+        description: Prior run id to resume checkpoints from (empty = fresh)
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  joint:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        seed: [260914001, 260914002, 260914003, 260914004, 260914005]
+    env:
+      D1_SEED: ${{ matrix.seed }}
+      D1_WALL_SECONDS: ${{ inputs.wall_seconds }}
+      D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
+    steps:
+      - name: Check out research package
+        uses: actions/checkout@v6
+
+      - name: Download prior checkpoint (resume)
+        if: ${{ inputs.resume_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: d1-joint-ckpt-seed${{ matrix.seed }}-${{ inputs.resume_run_id }}
+          path: results/d1_joint/seed${{ matrix.seed }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.resume_run_id }}
+        continue-on-error: true
+
+      - name: Set resume flag
+        run: |
+          if [ -n "${{ inputs.resume_run_id }}" ]; then
+            echo "D1_RESUME=1" >> "$GITHUB_ENV"
+          else
+            echo "D1_RESUME=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential git unzip wget
+
+      - name: Clone and build acados
+        run: |
+          set -euxo pipefail
+          git clone https://github.com/acados/acados.git "$GITHUB_WORKSPACE/acados"
+          cd "$GITHUB_WORKSPACE/acados"
+          git submodule update --recursive --init
+          mkdir -p build && cd build
+          cmake -DACADOS_WITH_QPOASES=ON -DACADOS_INSTALL_DIR="$GITHUB_WORKSPACE/acados" ..
+          make install -j4
+          echo "ACADOS_INSTALL_DIR=$GITHUB_WORKSPACE/acados" >> "$GITHUB_ENV"
+          echo "ACADOS_SOURCE_DIR=$GITHUB_WORKSPACE/acados" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/acados/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Download CasADi (MATLAB, linux64)
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/acados/external/casadi-matlab"
+          cd "$GITHUB_WORKSPACE/acados/external/casadi-matlab"
+          wget -q https://github.com/casadi/casadi/releases/download/3.6.7/casadi-3.6.7-linux64-matlab2018b.zip -O casadi.zip
+          unzip -q casadi.zip && rm -f casadi.zip
+          echo "CASADI_DIR=$GITHUB_WORKSPACE/acados/external/casadi-matlab" >> "$GITHUB_ENV"
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: >-
+            Deep_Learning_Toolbox
+            Optimization_Toolbox
+            Control_System_Toolbox
+            Statistics_and_Machine_Learning_Toolbox
+          cache: true
+
+      - name: Run joint pipeline (seed ${{ matrix.seed }})
+        timeout-minutes: 340
+        uses: matlab-actions/run-command@v3
+        with:
+          command: >-
+            setenv('ENV_RUN','true');
+            setenv('ACADOS_INSTALL_DIR',getenv('ACADOS_INSTALL_DIR'));
+            addpath(getenv('CASADI_DIR'));
+            addpath(fullfile(getenv('ACADOS_INSTALL_DIR'),'interfaces','acados_matlab_octave'));
+            addpath(genpath('src')); addpath('configs'); addpath('experiments');
+            run_d1_joint_pipeline;
+
+      - name: Upload checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-joint-ckpt-seed${{ matrix.seed }}-${{ github.run_id }}
+          path: results/d1_joint/seed${{ matrix.seed }}/
+          if-no-files-found: warn
+          retention-days: 30
