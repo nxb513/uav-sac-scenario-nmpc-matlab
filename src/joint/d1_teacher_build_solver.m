@@ -111,6 +111,8 @@ ocp.solver_options.nlp_solver_type = 'SQP_RTI';
 ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM';
 ocp.solver_options.qp_solver_cond_N = 5;
 ocp.solver_options.hessian_approx = 'GAUSS_NEWTON';
+ocp.solver_options.levenberg_marquardt = 1e-3;   % regularize -> avoid QP NaN
+ocp.solver_options.qp_solver_iter_max = 50;
 
 solver = AcadosOcpSolver(ocp);
 

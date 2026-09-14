@@ -212,7 +212,9 @@ M = cfg.M;
 xN = Xref(:,1); xL = Xref(:,1); uprev = uh;
 stateHist = repmat(xN,1,4); inputHist = repmat(uh,1,4);
 posErrN = zeros(T,1); duAcc = 0; okN = 0; cViol = 0; prevU = uh;
+diverged = false; kdone = T;
 EL = zeros(12, T+1); EL(:,1) = xL - Xref(:,1);       % LQR error traj for c_L
+usat_lo = [0;-0.5;-0.5;-0.25]; usat_hi = [cfg.plant.Tmax;0.5;0.5;0.25];
 
 for k = 1:T
     % ---- NMPC teacher branch (augmented M-scenario state, delta-u) ----------
@@ -222,22 +224,32 @@ for k = 1:T
     teacher.set('cost_y_ref_e', repmat(Xref(:,k+N),M,1));
     teacher.set('constr_x0', [repmat(xN,M,1); uprev]);
     teacher.solve();
-    okN = okN + (teacher.get('status')==0);
-    uN = uprev + teacher.get('u', 0);                % u = u_prev + du0
-    uprev = uN;
-    % nominal one-step prediction (for surrogate residual feature)
-    xNnom = quad_step_rk4(0, xN, uN, Ts, theta, []); %#ok<NASGU>
-    % streaming surrogate sample: (feature, u_NMPC) ---------------------------
-    refLook = Xref(:, k:k+10);
-    resid = zeros(12,1);                 % nominal plant == nominal model => 0
-    feat = surrogate_build_feature(stateHist, inputHist, refLook, resid);
-    sur = surrogate_stream_update(sur, feat, uN, st.teacherVersion, cfg);
-    st.totalSamples = st.totalSamples + 1;
+    okStatus = (teacher.get('status')==0);
+    du0 = teacher.get('u', 0);
+    if okStatus && all(isfinite(du0))
+        uN = uprev + du0;                            % u = u_prev + du0
+    else
+        uN = uprev;                                  % fallback: hold last control
+    end
+    uN = min(max(uN, usat_lo), usat_hi);
+    okN = okN + okStatus; uprev = uN;
+    % streaming surrogate sample (skip if any non-finite) ---------------------
+    if all(isfinite(stateHist(:))) && all(isfinite(inputHist(:)))
+        refLook = Xref(:, k:k+10);
+        feat = surrogate_build_feature(stateHist, inputHist, refLook, zeros(12,1));
+        if all(isfinite(feat))
+            sur = surrogate_stream_update(sur, feat, uN, st.teacherVersion, cfg);
+            st.totalSamples = st.totalSamples + 1;
+        end
+    end
     % advance NMPC plant + histories
     xNnext = quad_step_rk4(0, xN, uN, Ts, theta, []);
     stateHist = [stateHist(:,2:end), xN];
     inputHist = [inputHist(:,2:end), uN];
     duAcc = duAcc + sum((uN-prevU).^2); prevU = uN; xN = xNnext;
+    if ~all(isfinite(xN)) || norm(xN(1:3)) > 1e4
+        diverged = true; kdone = k; break;           % diverged -> penalize case
+    end
     posErrN(k) = norm(xN(1:3) - Xref(1:3,k+1));
     cViol = cViol + any(abs(xN(4:5)) > 1.35);
     % ---- LQR paired branch (own plant copy) --------------------------------
@@ -246,10 +258,11 @@ for k = 1:T
     xL = quad_step_rk4(0, xL, uL, Ts, theta, []);
     EL(:,k+1) = xL - Xref(:,k+1);
 end
-% reward from NMPC KPIs (normalized negative cost; lower error = higher reward)
-posRmse = sqrt(mean(posErrN.^2));
-failRate = 1 - okN/max(T,1);
-reward = -(posRmse + 0.01*sqrt(duAcc/max(T,1)) + 0.5*(cViol/max(T,1)) + 5*failRate);
+% reward from NMPC KPIs (negative cost; lower error/failure = higher reward)
+nOk = max(kdone,1);
+posRmse = sqrt(mean(posErrN(1:nOk).^2));
+failRate = 1 - okN/nOk;
+reward = -(posRmse + 0.01*sqrt(duAcc/nOk) + 0.5*(cViol/nOk) + 5*failRate + 10*diverged);
 % c_L contraction data from LQR error trajectory
 try
     outL = d1_finite_horizon_contraction(EL, lqr.P, cfg.H, struct());
