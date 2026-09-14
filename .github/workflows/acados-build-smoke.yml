@@ -56,6 +56,8 @@ jobs:
         uses: matlab-actions/run-command@v3
         with:
           command: >-
+            setenv('ENV_RUN','true');
+            setenv('ACADOS_INSTALL_DIR',getenv('ACADOS_INSTALL_DIR'));
             addpath(getenv('CASADI_DIR'));
             addpath(fullfile(getenv('ACADOS_INSTALL_DIR'),'interfaces','acados_matlab_octave'));
             cd(fullfile(getenv('ACADOS_INSTALL_DIR'),'examples','acados_matlab_octave','getting_started'));
