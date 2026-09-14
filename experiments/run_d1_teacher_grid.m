@@ -47,11 +47,34 @@ fprintf('configs=%s  cases=%s  selSteps=%d  wall=%ds  devN=%d\n', ...
     mat2str(configIdx - 1), mat2str(caseIdx), selSteps, ...
     opts.maxWallSeconds, numel(devCases));
 
-% Growth-based labeling: NO fixed error threshold. We run the FULL episode and
-% store the tracking-error trajectory; teacher quality = how well it CONTRACTS the
-% error (the same forward-growth quantity g that later defines the confidence c and
-% the blend weight alpha). H is the forward window = the intervention lead time.
-H = 20;
+% Contraction labeling on the common Lyapunov metric V = e'Pe (P = discrete LQR
+% Riccati selectedLqr.S; NO fixed error threshold). We run the FULL episode and
+% store the tracking-error trajectory; the teacher's finite-horizon contraction of
+% V over H steps is a raw diagnostic (NOT the final S7 confidence target). Tracking
+% accuracy (RMS/max position/attitude/velocity/rate) is recorded SEPARATELY and is
+% not the contraction/divergence definition.
+% H comes from the single source-of-truth cfg.contraction.horizonSteps (never
+% hard-coded here or in the analysis module).
+H = weakCfg.contraction.horizonSteps;
+
+% FAIL-FAST: the D1 main run REQUIRES P = selectedLqr.S. No NaN / identity / Qf /
+% recompute fallback is permitted; a bad or missing P stops the run before any
+% expensive solve. d1_load_lyapunov_P is the ONLY loader and validates P.
+try
+    [P_lyap, Pinfo] = d1_load_lyapunov_P();
+catch loadErr
+    error('D1:LyapunovPUnavailable', ...
+        ['D1 main run requires the Lyapunov matrix P = selectedLqr.S but it '...
+         'could not be loaded (no fallback permitted).\n  underlying: %s\n'...
+         '  loader: d1_load_lyapunov_P'], loadErr.message);
+end
+fprintf('Lyapunov metric:\n');
+fprintf('  P = selectedLqr.S\n');
+fprintf('  source = %s\n', Pinfo.source);
+fprintf('  minEig(P) = %.6g\n', Pinfo.minEig);
+fprintf('  H = %d steps  (cfg.contraction.horizonSteps)\n', H);
+fprintf('  Ts = %.4g s\n', dt);
+fprintf('  physical contraction horizon = %.4g s\n', H * dt);
 
 for ci = configIdx
     cfg = configs(ci).cfg;
@@ -65,13 +88,13 @@ for ci = configIdx
             continue;
         end
         result = run_one_task(configs(ci), dc, refCfg, theta, dt, ...
-            selSteps, H, opts.caseBudgetSeconds);
+            selSteps, H, opts.caseBudgetSeconds, P_lyap);
         save(taskPath, 'result', '-v7');
         fprintf(['  [cfg%02d %s] div=%d reason=%s steps=%d/%d rmsPos=%.3f ' ...
-            'maxPos=%.3f expFrac=%.2f meanSolve=%.2fs conv%%=%.0f\n'], ci, ...
+            'maxPos=%.3f contract%%=%.0f meanSolve=%.2fs conv%%=%.0f\n'], ci, ...
             dc.groupId, result.diverged, result.stopReason, ...
             result.stepsCompleted, result.stepsRequested, result.rmsPositionM, ...
-            result.maxPositionM, result.expansionFraction, ...
+            result.maxPositionM, 100 * result.fractionContracting, ...
             result.meanSolveTime, 100 * result.convergedFraction);
     end
 end
@@ -80,7 +103,7 @@ end
 
 % ------------------------------------------------------------------------
 function result = run_one_task(configEntry, dc, refCfg, theta, dt, ...
-        selSteps, H, caseBudget)
+        selSteps, H, caseBudget, P_lyap)
 cfg = configEntry.cfg;
 % Deterministic reference for this case (Xref state + Uref flatness feedforward).
 [Xref, ~, ~, Uref] = d1_regenerate_reference(dc.family, dc.speed, dc.accel, ...
@@ -139,35 +162,41 @@ end
 m = min(stepsDone + 1, refCols);        % clip both to the common length
 E = X(:, 1:m) - Xref(:, 1:m);
 result = build_result(configEntry, dc, E, H, reason, stepsDone, selSteps, ...
-    solveTimes, exitflags, grossBound);
+    solveTimes, exitflags, grossBound, P_lyap);
 end
 
 % ------------------------------------------------------------------------
 function result = build_result(configEntry, dc, E, H, reason, stepsDone, ...
-        selSteps, solveTimes, exitflags, grossBound)
-% Descriptive error signals (per channel) + the forward-growth metric on the
-% position-error signal. The FULL error trajectory E is stored so the exact
-% growth quantity g, the confidence targets, and any error norm can be recomputed
-% OFFLINE without re-running the teacher (which is the expensive part).
-p = vecnorm(E(1:3, :), 2, 1);            % position-error signal (m)
-att = rad2deg(vecnorm(E(4:6, :), 2, 1)); % attitude error (deg, descriptive)
+        selSteps, solveTimes, exitflags, grossBound, P_lyap)
+% Two SEPARATE outcome families (kept distinct on purpose):
+%  (1) TRACKING ACCURACY  - per-channel error magnitudes (position/attitude/
+%      velocity/rate). These are accuracy, NOT the contraction/divergence label.
+%  (2) LYAPUNOV CONTRACTION - the PRIMARY finite-horizon metric on V = e'Pe
+%      (P = discrete LQR Riccati selectedLqr.S), computed by
+%      d1_finite_horizon_contraction. NO fixed error threshold is used.
+% The FULL error trajectory E is stored so V, the confidence targets, and any
+% norm can be recomputed OFFLINE without re-running the teacher.
+
+% --- (1) tracking accuracy (descriptive, threshold-free magnitudes) ---
+p = vecnorm(E(1:3, :), 2, 1);            % position error (m)
+att = rad2deg(vecnorm(E(4:6, :), 2, 1)); % attitude error (deg, reporting only)
 vel = vecnorm(E(7:9, :), 2, 1);
 rate = vecnorm(E(10:12, :), 2, 1);
-nCols = numel(p);
 
-% Forward H-step growth of the position error: g_k = p(k+H)/p(k). A near-zero
-% floor (1% of the episode's peak error) keeps the ratio finite when the teacher
-% is momentarily perfect; it only affects the log-ratio scale, not the sign of
-% growth. These aggregates are provisional; the stored E allows the final
-% definition to be pinned at S7.
-if nCols > H
-    p0 = p(1:nCols - H); pH = p(1 + H:nCols);
-    floorv = max(1e-6, 0.01 * max(p));
-    expansionFraction = mean(pH > p0);                 % share of steps expanding
-    meanLogGrowth = mean(log(max(pH, floorv) ./ max(p0, floorv)));
-    maxGrowthFactor = max(pH ./ max(p0, floorv));
-else
-    expansionFraction = NaN; meanLogGrowth = NaN; maxGrowthFactor = NaN;
+% --- (2) Lyapunov finite-horizon contraction V=e'Pe ---
+con = struct('fractionContracting', NaN, 'meanG_H', NaN, 'medianG_H', NaN, ...
+    'maxRmax', NaN, 'nInsufficientHorizon', NaN, 'nNonfiniteWindow', NaN, ...
+    'Vstart', NaN, 'Vend', NaN);
+if ~isempty(P_lyap) && size(E, 2) > H
+    c = d1_finite_horizon_contraction(E, P_lyap, H);
+    con.fractionContracting = c.fractionContracting;
+    con.meanG_H = c.meanG_H;
+    con.medianG_H = c.medianG_H;
+    con.maxRmax = c.maxRmax;
+    con.nInsufficientHorizon = c.nInsufficientHorizon;
+    con.nNonfiniteWindow = c.nNonfiniteWindow;
+    con.Vstart = c.Vstart;
+    con.Vend = c.Vend;
 end
 
 result = struct();
@@ -185,14 +214,22 @@ result.budgetStopped = strcmp(reason, 'budget');
 result.complete = strcmp(reason, 'complete');
 result.stepsCompleted = stepsDone;
 result.stepsRequested = selSteps;
+% (1) tracking accuracy
 result.maxPositionM = finite_max(p);
 result.rmsPositionM = sqrt(mean(p(isfinite(p)) .^ 2));
 result.maxAttitudeDeg = finite_max(att);
 result.maxVelocityMps = finite_max(vel);
 result.maxBodyRateRadps = finite_max(rate);
-result.expansionFraction = expansionFraction;
-result.meanLogGrowth = meanLogGrowth;
-result.maxGrowthFactor = maxGrowthFactor;
+% (2) Lyapunov contraction (PRIMARY loss-of-tracking / growth metric)
+result.fractionContracting = con.fractionContracting;   % share of states with dV_H<0
+result.meanG_H = con.meanG_H;                           % mean (1/H)log(V_{k+H}/V_k)
+result.medianG_H = con.medianG_H;
+result.maxRmax = con.maxRmax;                           % worst transient V_max/V_k
+result.nInsufficientHorizon = con.nInsufficientHorizon; % states excluded (k+H>N)
+result.nNonfiniteWindow = con.nNonfiniteWindow;
+result.Vstart = con.Vstart;
+result.Vend = con.Vend;
+% solver + bookkeeping
 result.meanSolveTime = mean(solveTimes(1:max(stepsDone, 1)));
 result.totalSolveTime = sum(solveTimes(1:stepsDone));
 result.convergedFraction = mean(exitflags(1:max(stepsDone, 1)) > 0);
@@ -204,46 +241,27 @@ end
 
 % ------------------------------------------------------------------------
 function configs = build_configs()
+% FINAL NMPC teacher: a SINGLE fully-specified Bryson configuration -- NO tuning
+% knob. Q,R are the physically-normalized Bryson base (step2_nmpc_config), R is
+% used as-is (lambda_R = 1), Qf = 0, dU = 0, prediction horizon Np = 20. There is
+% nothing to grid-search: S3 becomes VERIFICATION of this one teacher on the 24
+% teacher-dev cases (does it track / not diverge), not a selection.
 base = step2_nmpc_config();
-posAttScales = [0.5, 2];
-inputScales = [0.5, 2];
-horizons = [20, 30];
-configs = struct('cfg', {}, 'label', {}, 'index', {});
-idx = 0;
-for pa = posAttScales
-    for is = inputScales
-        for N = horizons
-            idx = idx + 1;
-            cfg = base;
-            cfg.scenario.count = 5;               % M=5 full scope
-            cfg.predictionHorizon = N;
-            cfg.controlHorizon = 5;               % Nc=5
-            cfg.solver.algorithm = 'sqp';
-            % Converged teacher (does not compromise quality): warm-started solves
-            % converge in ~40-67 iters, so maxIter=80 reaches the optimum, and
-            % MaxFunctionEvaluations=1500 hard-bounds each solve (~60 s on the
-            % 2-core CI runner) so none can run away. With 1-case-per-shard each
-            % case has the full 5.5 h slot; the divergence check stops lost cases.
-            cfg.solver.maxIterations = 80;
-            cfg.solver.maxFunctionEvaluations = 1500;
-            % Input-deviation penalty references per-scenario hover (established,
-            % scenario-neutral choice). A feedforward-referenced variant
-            % ('feedforward', plumbed via the struct reference) is available but is
-            % NOT clearly better under plant uncertainty (the nominal flatness
-            % feedforward is not the true feedforward for the sampled plant; an A/B
-            % on an aggressive case was ~8% worse), so it is evaluated as an
-            % ABLATION rather than adopted as the main teacher objective.
-            cfg.weights.inputReference = 'hover';
-            q = diag(base.weights.Q);
-            q(1:6) = q(1:6) * pa;                 % position+attitude penalty
-            cfg.weights.Q = diag(q);
-            cfg.weights.Qf = 4.0 * cfg.weights.Q;
-            cfg.weights.R = base.weights.R * is;  % input penalty
-            configs(idx) = struct('cfg', cfg, 'index', idx, ...
-                'label', sprintf('posAtt%.1f_input%.1f_N%d', pa, is, N)); %#ok<AGROW>
-        end
-    end
-end
+Np = 20;
+cfg = base;
+cfg.scenario.count = 5;               % M=5
+cfg.predictionHorizon = Np;           % Np = 20
+cfg.controlHorizon = 5;               % Nc = 5
+cfg.solver.algorithm = 'sqp';
+cfg.solver.maxIterations = 80;
+cfg.solver.maxFunctionEvaluations = 1500;
+cfg.weights.inputReference = 'hover'; % per-scenario hover
+cfg.weights.Q = base.weights.Q;       % Bryson
+cfg.weights.R = base.weights.R;       % Bryson (lambda_R = 1, no scaling)
+cfg.weights.Qf = zeros(12);           % terminal not amplified (stage already weights e_N by Q)
+cfg.weights.dU = zeros(4);            % no input-rate spec -> dU = 0
+configs = struct('cfg', cfg, 'index', 1, ...
+    'label', sprintf('bryson_N%d', Np));
 end
 
 % ------------------------------------------------------------------------

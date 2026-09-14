@@ -31,8 +31,18 @@ Ucontrol0 = prepare_warm_start(nominalTheta, horizon, controlHorizon, warmStart)
 [lb, ub] = nmpc_input_bounds(nominalTheta, controlHorizon);
 z0 = min(max(Ucontrol0(:), lb), ub);
 
+% Start the solve clock BEFORE building the objective so the objective can
+% enforce the per-solve wall limit on EVERY function evaluation (not only per
+% fmincon iteration via OutputFcn). This makes a single pathological solve
+% impossible to run away for many minutes, which is what caused shard timeouts
+% at long horizons/hard cases.
+maxWallSeconds = solver_wall_limit(cfg);
+solveClock = tic;
+stoppedByWallTime = false;
+
 objective = @(z) scenario_objective( ...
-    z, x0, Xref, uRefWindow, thetaScenarios, cfg, previousInput);
+    z, x0, Xref, uRefWindow, thetaScenarios, cfg, previousInput, ...
+    solveClock, maxWallSeconds);
 nonlcon = @(z) scenario_constraints(z, x0, thetaScenarios, cfg);
 if ~cfg.constraints.enableStateBounds || ~cfg.constraints.enforceScenarioStateBounds
     nonlcon = [];
@@ -40,15 +50,23 @@ end
 
 warmStartCost = objective(z0);
 
-solveClock = tic;
-stoppedByWallTime = false;
 options = nmpc_fmincon_options(cfg);
-maxWallSeconds = solver_wall_limit(cfg);
 if isfinite(maxWallSeconds)
     options.OutputFcn = @stop_on_wall_time;
 end
-[zOpt, fval, exitflag, output] = fmincon(objective, z0, [], [], [], [], ...
-                                         lb, ub, nonlcon, options);
+% fmincon's internal SQP (nlpSQP) can itself error on a pathological/ill-conditioned
+% step. Treat that like a failed solve and fall back to the (saturated) warm start
+% so one bad step cannot abort the whole episode/shard.
+try
+    [zOpt, fval, exitflag, output] = fmincon(objective, z0, [], [], [], [], ...
+                                             lb, ub, nonlcon, options);
+catch solveErr
+    zOpt = z0;
+    fval = warmStartCost;
+    exitflag = -3;
+    output = struct('message', ['fmincon errored; warm-start fallback: ' ...
+        solveErr.message], 'iterations', 0, 'funcCount', 0);
+end
 solveTime = toc(solveClock);
 
 UcontrolOpt = reshape(zOpt, 4, controlHorizon);
@@ -132,13 +150,8 @@ Ucontrol0 = nmpc_saturate_sequence(U0, theta);
 end
 
 function cost = scenario_objective( ...
-        z, x0, Xref, uRefWindow, thetaScenarios, cfg, previousInput)
-controlHorizon = nmpc_control_horizon(cfg);
-Ucontrol = reshape(z, 4, controlHorizon);
-U = nmpc_expand_control_sequence(Ucontrol, cfg.predictionHorizon);
-scenarioCount = numel(thetaScenarios);
-cost = 0.0;
-
+        z, x0, Xref, uRefWindow, thetaScenarios, cfg, previousInput, ...
+        solveClock, maxWallSeconds)
 % Numerical barrier for a candidate input whose predicted rollout leaves the
 % valid attitude chart (ZYX Euler singularity at |pitch| = 90 deg) or otherwise
 % diverges to a non-finite state. Returning a dominating finite cost makes the
@@ -147,6 +160,22 @@ cost = 0.0;
 % the barrier magnitude provided it exceeds any attainable feasible cost, so this
 % is a class-R numerical constant, not a scientific/tunable parameter.
 INVALID_ROLLOUT_PENALTY = 1e12;
+
+% Per-evaluation wall guard: once the per-solve wall limit is exceeded, return the
+% barrier for EVERY subsequent evaluation so fmincon exhausts quickly and returns.
+% This bounds a single solve reliably even when fmincon is stuck making many slow
+% evaluations, which OutputFcn (per-iteration) alone does not catch.
+if nargin >= 9 && ~isempty(maxWallSeconds) && isfinite(maxWallSeconds) && ...
+        toc(solveClock) > maxWallSeconds
+    cost = INVALID_ROLLOUT_PENALTY;
+    return;
+end
+
+controlHorizon = nmpc_control_horizon(cfg);
+Ucontrol = reshape(z, 4, controlHorizon);
+U = nmpc_expand_control_sequence(Ucontrol, cfg.predictionHorizon);
+scenarioCount = numel(thetaScenarios);
+cost = 0.0;
 
 for i = 1:scenarioCount
     theta = thetaScenarios(i);

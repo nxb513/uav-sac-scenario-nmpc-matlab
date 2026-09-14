@@ -13,6 +13,20 @@ cfg.sampleTime = 0.05;
 cfg.stepCount = 200;
 cfg.plant = plant;
 
+% Single source-of-truth for the D1 finite-horizon Lyapunov-contraction window
+% (V=e'Pe over H steps). Frozen at 20 steps = H*sampleTime = 1.0 s, matching the
+% intervention lead time. Every D1 contraction caller MUST read H from here; the
+% analysis module d1_finite_horizon_contraction takes H as an argument and never
+% hard-codes it. (Distinct from the legacy cfg.predictiveAnalysis.horizonSteps.)
+cfg.contraction.horizonSteps = 20;
+
+% D1 baseline/Lyapunov LQR artifact (Bryson-designed, built by build_d1_bryson_lqr).
+% P = selectedLqr.S here is the Lyapunov matrix for V=e'Pe and K is the baseline
+% LQR gain. This supersedes the old grid-retuned lqr_retune_realized_coverage_v6
+% artifact for the D1 pipeline (that legacy artifact is kept but no longer used).
+cfg.contraction.lqrArtifactPath = fullfile('results', cfg.name, ...
+    'lqr_bryson_v1', 'selected_lqr.mat');
+
 cfg.scope.defaultController = 'LQR';
 cfg.scope.specialistTeacher = 'SAC_scenario_NMPC';
 cfg.scope.specialistStudent = 'direct_control_surrogate_no_residual_nn';
