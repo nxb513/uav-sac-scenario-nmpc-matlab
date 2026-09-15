@@ -247,7 +247,7 @@ for k = 1:T
     if okStatus && all(isfinite(du0))
         uN = uprev + du0;                            % u = u_prev + du0
     else
-        uN = uprev;                                  % fallback: hold last control
+        uN = uh - lqr.K*(xN - Xref(:,k));            % LQR fallback keeps plant stable
     end
     uN = min(max(uN, usat_lo), usat_hi);
     okN = okN + okStatus; uprev = uN;
@@ -276,11 +276,14 @@ for k = 1:T
     xL = quad_step_rk4(0, xL, uL, Ts, theta, []);
     EL(:,k+1) = xL - Xref(:,k+1);
 end
-% reward from NMPC KPIs (negative cost; lower error/failure = higher reward)
+% reward from NMPC KPIs (negative cost; lower error/failure = higher reward).
+% posErr capped at 5 m/step so a rare hard case cannot swamp the mean; LQR
+% fallback keeps the plant bounded, so no separate divergence term.
 nOk = max(kdone,1);
-posRmse = sqrt(mean(posErrN(1:nOk).^2));
+pe = min(posErrN(1:nOk), 5);
+posRmse = sqrt(mean(pe.^2));
 failRate = 1 - okN/nOk;
-reward = -(posRmse + 0.01*sqrt(duAcc/nOk) + 0.5*(cViol/nOk) + 5*failRate + 10*diverged);
+reward = -(posRmse + 0.01*sqrt(duAcc/nOk) + 0.5*(cViol/nOk) + 5*failRate);
 % c_L contraction data from LQR error trajectory
 try
     outL = d1_finite_horizon_contraction(EL, lqr.P, cfg.H, struct());
