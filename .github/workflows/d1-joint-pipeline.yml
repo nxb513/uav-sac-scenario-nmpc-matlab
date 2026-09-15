@@ -27,6 +27,11 @@ on:
         required: false
         default: "0"
         type: string
+      seeds:
+        description: JSON array of seeds to run (1 or more)
+        required: false
+        default: "[260914001, 260914002, 260914003, 260914004, 260914005]"
+        type: string
       resume_run_id:
         description: Prior run id to resume checkpoints from (empty = fresh)
         required: false
@@ -41,7 +46,7 @@ jobs:
       fail-fast: false
       max-parallel: 5
       matrix:
-        seed: [260914001, 260914002, 260914003, 260914004, 260914005]
+        seed: ${{ fromJSON(inputs.seeds) }}
     env:
       D1_SEED: ${{ matrix.seed }}
       D1_WALL_SECONDS: ${{ inputs.wall_seconds }}

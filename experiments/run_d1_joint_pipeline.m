@@ -207,6 +207,17 @@ for s = 0:cfg.N-1, solver.set('cost_W', W, s); end
 % terminal weight kept at build-time (Qf=0; terminal retune not critical).
 end
 
+function warmstart_ref(teacher, Xref, k, uh, cfg)
+% seed the SQP initial guess along the reference (helps convergence on fast refs)
+M = cfg.M; N = cfg.N; nc = size(Xref,2);
+for j = 0:N
+    teacher.set('init_x', [repmat(Xref(:,min(k+j,nc)),M,1); uh], j);
+end
+for j = 0:N-1
+    teacher.set('init_u', zeros(4,1), j);
+end
+end
+
 % ---- paired NMPC + LQR rollout on one case ---------------------------------
 function [reward, sur, cLdata, st] = paired_rollout(teacher, lqr, kase, sur, st, cfg)
 Ts = cfg.Ts; N = cfg.N; theta = cfg.plant.nominal;
@@ -221,6 +232,7 @@ posErrN = zeros(T,1); duAcc = 0; okN = 0; cViol = 0; prevU = uh;
 diverged = false; kdone = T;
 EL = zeros(12, T+1); EL(:,1) = xL - Xref(:,1);       % LQR error traj for c_L
 usat_lo = [0;-0.5;-0.5;-0.25]; usat_hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+warmstart_ref(teacher, Xref, 1, uh, cfg);
 
 for k = 1:T
     % ---- NMPC teacher branch (augmented M-scenario state, delta-u) ----------
@@ -464,6 +476,7 @@ Xr = Xref(:, 1:T);
 xNt = nan(12, T); xLt = nan(12, T); okv = zeros(1, T); kdiv = 0;
 % NMPC teacher branch
 xN = Xref(:,1); uprev = uh;
+warmstart_ref(teacher, Xref, 1, uh, cfg);
 for k = 1:T
     for s = 0:N-1, teacher.set('cost_y_ref', [repmat(Xref(:,k+s),M,1); uh], s); end
     teacher.set('cost_y_ref_e', repmat(Xref(:,k+N),M,1));
