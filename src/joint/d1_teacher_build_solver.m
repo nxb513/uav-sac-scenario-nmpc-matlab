@@ -60,9 +60,6 @@ model = AcadosModel();
 model.name = 'd1_quad_teacher_m5';
 model.x = X; model.u = du;
 model.disc_dyn_expr = Xnext;
-% tilt on nominal scenario (scenario 1): cos(phi)*cos(theta) >= cos(70deg)
-tiltExpr = cos(X(4))*cos(X(5));
-model.con_h_expr = tiltExpr; model.con_h_expr_0 = tiltExpr;
 
 ocp = AcadosOcp();
 ocp.model = model;
@@ -89,21 +86,13 @@ ocp.cost.yref = zeros(ny, 1); ocp.cost.yref_e = zeros(ny_e, 1);
 ocp.constraints.idxbu = (0:3).';
 ocp.constraints.lbu = [-P.Tmax; -1; -1; -0.5];
 ocp.constraints.ubu = [ P.Tmax;  1;  1;  0.5];
-% state box: each scenario attitude/vel/rate + u_prev in actuator range
-idxbx = []; lbx = []; ubx = [];
-sLb = [-1.35;-1.35;-pi; -25;-25;-25; -10;-10;-10];
-sUb = [ 1.35; 1.35; pi;  25; 25; 25;  10; 10; 10];
-for i = 1:M
-    base = (i-1)*n1;
-    idxbx = [idxbx; (base+3:base+11).'];       %#ok<AGROW> % att/vel/rate (0-idx)
-    lbx = [lbx; sLb]; ubx = [ubx; sUb];          %#ok<AGROW>
-end
-idxbx = [idxbx; (M*n1:M*n1+3).'];               % u_prev
-lbx = [lbx; 0; -0.5; -0.5; -0.25];
-ubx = [ubx; P.Tmax; 0.5; 0.5; 0.25];
-ocp.constraints.idxbx = idxbx; ocp.constraints.lbx = lbx; ocp.constraints.ubx = ubx;
-ocp.constraints.lh = cos(deg2rad(70)); ocp.constraints.uh = 1.0;
-ocp.constraints.lh_0 = cos(deg2rad(70)); ocp.constraints.uh_0 = 1.0;
+% ONLY actuator limits via the u_prev states. NO hard attitude/rate/tilt bounds:
+% those made the OCP infeasible on aggressive refs (solve fail -> divergence),
+% while the unconstrained LQR tracks the same refs fine. Physical feasibility of
+% the refs is guaranteed by S0 (tier-A); teacher need not re-enforce state boxes.
+ocp.constraints.idxbx = (M*n1:M*n1+3).';
+ocp.constraints.lbx = [0; -0.5; -0.5; -0.25];
+ocp.constraints.ubx = [P.Tmax; 0.5; 0.5; 0.25];
 ocp.constraints.x0 = zeros(nxa, 1);
 
 ocp.solver_options.integrator_type = 'DISCRETE';
