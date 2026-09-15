@@ -30,6 +30,12 @@ cases = generate_teacher_dev_cases(cfg);    % ~120 cases, 1000-step references
 fprintf('built teacher(acados M=%d Nc=%d) + LQR(P minEig=%.4g) + %d cases\n', ...
     cfg.M, cfg.Nc, min(eig(lqr.P)), numel(cases));
 
+% ---- diagnostic mode: fly a few cases, dump trajectories, exit --------------
+if strcmp(getenv_str('D1_DIAG','0'), '1')
+    diag_flight(cfg, teacher, lqr, cases);
+    return;
+end
+
 % ---- init or resume learners ------------------------------------------------
 ckptPath = fullfile(cfg.runDir, sprintf('checkpoint_seed%d.mat', cfg.seed));
 if cfg.resume && isfile(ckptPath)
@@ -425,4 +431,55 @@ function save_checkpoint(path, sac, sur, st, cfg) %#ok<INUSD>
 rngState = rng; %#ok<NASGU>
 save(path, 'sac', 'sur', 'st', 'rngState', '-v7.3');
 fprintf('CHECKPOINT saved iter=%d samples=%d -> %s\n', st.iter, st.totalSamples, path);
+end
+
+% ---- diagnostics ------------------------------------------------------------
+function diag_flight(cfg, teacher, lqr, cases)
+[Q0, R0] = d1_bryson_weights(cfg.plant);
+set_teacher_weights(teacher, Q0, R0, cfg);
+sel = unique(round(linspace(1, numel(cases), min(4, numel(cases)))));
+D = struct('groupId',{},'Xref',{},'xN',{},'xL',{},'ok',{},'kdiv',{});
+for ci = 1:numel(sel)
+    kase = cases(sel(ci));
+    [Xref, xN, xL, okv, kdiv] = fly_case(teacher, lqr, kase, cfg);
+    D(ci).groupId = kase.groupId; D(ci).Xref = Xref;
+    D(ci).xN = xN; D(ci).xL = xL; D(ci).ok = okv; D(ci).kdiv = kdiv;
+    peN = vecnorm(xN(1:3,:) - Xref(1:3,:));
+    peL = vecnorm(xL(1:3,:) - Xref(1:3,:));
+    fprintf(['DIAG %s: NMPC posErr med=%.2f max=%.2f okRate=%.2f kdiv=%d | ' ...
+        'LQR posErr med=%.2f max=%.2f\n'], kase.groupId, median(peN), max(peN), ...
+        mean(okv), kdiv, median(peL), max(peL));
+end
+if ~isfolder(cfg.runDir), mkdir(cfg.runDir); end
+save(fullfile(cfg.runDir, sprintf('diag_seed%d.mat', cfg.seed)), 'D', '-v7.3');
+fprintf('DIAG_DONE saved %d cases\n', numel(D));
+end
+
+function [Xr, xNt, xLt, okv, kdiv] = fly_case(teacher, lqr, kase, cfg)
+Ts = cfg.Ts; N = cfg.N; M = cfg.M; theta = cfg.plant.nominal;
+Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
+uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
+lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+Xr = Xref(:, 1:T);
+xNt = nan(12, T); xLt = nan(12, T); okv = zeros(1, T); kdiv = 0;
+% NMPC teacher branch
+xN = Xref(:,1); uprev = uh;
+for k = 1:T
+    for s = 0:N-1, teacher.set('cost_y_ref', [repmat(Xref(:,k+s),M,1); uh], s); end
+    teacher.set('cost_y_ref_e', repmat(Xref(:,k+N),M,1));
+    teacher.set('constr_x0', [repmat(xN,M,1); uprev]);
+    teacher.solve();
+    ok = (teacher.get('status')==0); du0 = teacher.get('u',0);
+    if ok && all(isfinite(du0)), uN = uprev + du0; else, uN = uprev; end
+    uN = min(max(uN, lo), hi); uprev = uN; okv(k) = ok;
+    xN = quad_step_rk4(0, xN, uN, Ts, theta, []); xNt(:,k) = xN;
+    if ~all(isfinite(xN)) || norm(xN(1:3)) > 1e4, kdiv = k; break; end
+end
+% LQR paired branch (independent, full length)
+xL = Xref(:,1);
+for k = 1:T
+    uL = uh - lqr.K*(xL - Xref(:,k)); uL = min(max(uL, lo), hi);
+    xL = quad_step_rk4(0, xL, uL, Ts, theta, []); xLt(:,k) = xL;
+    if ~all(isfinite(xL)) || norm(xL(1:3)) > 1e4, break; end
+end
 end

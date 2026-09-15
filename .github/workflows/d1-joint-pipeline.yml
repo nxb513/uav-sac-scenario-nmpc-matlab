@@ -22,6 +22,11 @@ on:
         required: true
         default: "20"
         type: string
+      diag:
+        description: "1 = diagnostic flight (dump trajectories, no SAC); 0 = train"
+        required: false
+        default: "0"
+        type: string
       resume_run_id:
         description: Prior run id to resume checkpoints from (empty = fresh)
         required: false
@@ -42,6 +47,7 @@ jobs:
       D1_WALL_SECONDS: ${{ inputs.wall_seconds }}
       D1_STEPS: ${{ inputs.steps }}
       D1_CASES_PER_EVAL: ${{ inputs.cases_per_eval }}
+      D1_DIAG: ${{ inputs.diag }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:
       - name: Check out research package
