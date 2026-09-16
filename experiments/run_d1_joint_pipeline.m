@@ -38,6 +38,10 @@ end
 
 % ---- init or resume learners ------------------------------------------------
 ckptPath = fullfile(cfg.runDir, sprintf('checkpoint_seed%d.mat', cfg.seed));
+if strcmp(getenv_str('D1_SURR_EVAL','0'), '1')
+    assert(isfile(ckptPath), 'surrogate eval requires a checkpoint (set resume_run_id).');
+    S = load(ckptPath); surrogate_eval(cfg, lqr, cases, S.sur); return;
+end
 if cfg.resume && isfile(ckptPath)
     S = load(ckptPath); sac = S.sac; sur = S.sur; st = S.st;
     rng(S.rngState);
@@ -498,4 +502,42 @@ for k = 1:T
     xL = quad_step_rk4(0, xL, uL, Ts, theta, []); xLt(:,k) = xL;
     if ~all(isfinite(xL)) || norm(xL(1:3)) > 1e4, break; end
 end
+end
+
+function surrogate_eval(cfg, lqr, cases, sur)
+% Fly the trained surrogate CLOSED-LOOP (u_S = pi_S(state,ref)), measure imitation
+% tracking + finite-horizon contraction (c_S basis). No teacher/NMPC here.
+Ts = cfg.Ts; theta = cfg.plant.nominal;
+uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
+lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+sel = unique(round(linspace(1, numel(cases), min(6, numel(cases)))));
+D = struct('groupId',{},'Xref',{},'xS',{},'xL',{},'posErr',{},'gS',{},'contractFrac',{});
+for ci = 1:numel(sel)
+    kase = cases(sel(ci)); Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-11);
+    xS = Xref(:,1); stateHist = repmat(xS,1,4); inputHist = repmat(uh,1,4);
+    xSt = nan(12,T);
+    for k = 1:T
+        feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
+        z = single(feat) ./ sur.featScale;
+        pred = predict(sur.net, dlarray(z,'CB'));
+        u = double(sur.tgtMid + sur.tgtHalf .* extractdata(pred(:)));
+        u = min(max(u, lo), hi);
+        stateHist = [stateHist(:,2:end), xS]; inputHist = [inputHist(:,2:end), u];
+        xS = quad_step_rk4(0, xS, u, Ts, theta, []); xSt(:,k) = xS;
+        if ~all(isfinite(xS)) || norm(xS(1:3)) > 1e4, break; end
+    end
+    Tv = find(all(isfinite(xSt),1), 1, 'last'); if isempty(Tv), Tv = 1; end
+    ES = xSt(:,1:Tv) - Xref(:,1:Tv);
+    pe = vecnorm(xSt(1:3,1:Tv) - Xref(1:3,1:Tv));
+    gS = [];
+    try o = d1_finite_horizon_contraction(ES, lqr.P, cfg.H, struct()); gS = o.g_H(isfinite(o.g_H)); catch, end
+    cf = mean(gS < 0);
+    D(ci).groupId = kase.groupId; D(ci).Xref = Xref(:,1:Tv); D(ci).xS = xSt(:,1:Tv);
+    D(ci).posErr = pe; D(ci).gS = gS(:).'; D(ci).contractFrac = cf;
+    fprintf('SURR %s: posErr med=%.3f max=%.3f Tv=%d/%d | c_S contractFrac=%.2f\n', ...
+        kase.groupId, median(pe), max(pe), Tv, T, cf);
+end
+if ~isfolder(cfg.runDir), mkdir(cfg.runDir); end
+save(fullfile(cfg.runDir, sprintf('surr_eval_seed%d.mat', cfg.seed)), 'D', '-v7.3');
+fprintf('SURR_EVAL_DONE %d cases\n', numel(D));
 end

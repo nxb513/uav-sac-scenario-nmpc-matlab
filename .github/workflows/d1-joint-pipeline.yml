@@ -27,6 +27,11 @@ on:
         required: false
         default: "0"
         type: string
+      surr_eval:
+        description: "1 = evaluate trained surrogate closed-loop (needs resume_run_id)"
+        required: false
+        default: "0"
+        type: string
       seeds:
         description: JSON array of seeds to run (1 or more)
         required: false
@@ -53,6 +58,7 @@ jobs:
       D1_STEPS: ${{ inputs.steps }}
       D1_CASES_PER_EVAL: ${{ inputs.cases_per_eval }}
       D1_DIAG: ${{ inputs.diag }}
+      D1_SURR_EVAL: ${{ inputs.surr_eval }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:
       - name: Check out research package
