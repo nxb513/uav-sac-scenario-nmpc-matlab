@@ -96,11 +96,12 @@ ocp.constraints.ubx = [P.Tmax; 0.5; 0.5; 0.25];
 ocp.constraints.x0 = zeros(nxa, 1);
 
 ocp.solver_options.integrator_type = 'DISCRETE';
-% RTI for throughput (~10x faster than full SQP): the surrogate wants LOTS of
-% teacher samples, not marginally tighter Q,R. Feasibility (no state bounds) +
-% warm-start + LQR fallback make RTI track well enough; bad-case labels are
-% wanted anyway (calibrates c_S). Full SQP kept as fallback if RTI degrades.
-ocp.solver_options.nlp_solver_type = 'SQP_RTI';
+% Solver selectable via cfg.solverType (env D1_SOLVER): 'SQP_RTI' (1 iter, ~10x
+% faster, more surrogate samples) vs 'SQP' (up to 30 iters, tighter labels).
+ocp.solver_options.nlp_solver_type = cfg.solverType;
+if strcmp(cfg.solverType, 'SQP')
+    ocp.solver_options.nlp_solver_max_iter = 30;
+end
 ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM';
 ocp.solver_options.qp_solver_cond_N = 5;
 ocp.solver_options.hessian_approx = 'GAUSS_NEWTON';

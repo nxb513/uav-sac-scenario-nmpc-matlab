@@ -37,6 +37,11 @@ on:
         required: false
         default: "[260914001, 260914002, 260914003, 260914004, 260914005]"
         type: string
+      solver:
+        description: "NMPC solver: SQP_RTI (fast) or SQP (accurate)"
+        required: false
+        default: "SQP_RTI"
+        type: string
       resume_run_id:
         description: Prior run id to resume checkpoints from (empty = fresh)
         required: false
@@ -59,6 +64,7 @@ jobs:
       D1_CASES_PER_EVAL: ${{ inputs.cases_per_eval }}
       D1_DIAG: ${{ inputs.diag }}
       D1_SURR_EVAL: ${{ inputs.surr_eval }}
+      D1_SOLVER: ${{ inputs.solver }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:
       - name: Check out research package

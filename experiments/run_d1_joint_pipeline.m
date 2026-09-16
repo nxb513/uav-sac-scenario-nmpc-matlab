@@ -94,6 +94,7 @@ cfg.wallSeconds = getenv_num('D1_WALL_SECONDS', 300);
 cfg.resume = strcmp(getenv_str('D1_RESUME','0'),'1');
 cfg.Ts = 0.05; cfg.N = 20; cfg.Nc = 5; cfg.H = 20; cfg.Qf = 0; cfg.dU = 0;
 cfg.M = 5;                                          % robust scenarios (frozen)
+cfg.solverType = getenv_str('D1_SOLVER', 'SQP_RTI'); % 'SQP_RTI' (fast) | 'SQP' (accurate)
 cfg.stepsPerCase = getenv_num('D1_STEPS', 1000);
 cfg.casesPerEval = getenv_num('D1_CASES_PER_EVAL', 20);
 cfg.plant = d1_joint_plant_params();
