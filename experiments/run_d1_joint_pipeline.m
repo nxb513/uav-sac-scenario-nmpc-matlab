@@ -46,7 +46,7 @@ if strcmp(getenv_str('D1_COMPARE','0'), '1')
     % Fly LQR-only / teacher-NMPC / proposed(LQR+surrogate blend) on one case per
     % family, dump full trajectories + tracking error for the comparison figures.
     assert(isfile(ckptPath), 'compare requires a checkpoint (set resume_run_id).');
-    S = load(ckptPath); compare_flight(cfg, teacher, lqr, cases, S.sur); return;
+    S = load(ckptPath); compare_flight(cfg, teacher, lqr, cases, S.sur, S.sac); return;
 end
 if cfg.resume && isfile(ckptPath)
     S = load(ckptPath); sac = S.sac; sur = S.sur; st = S.st;
@@ -253,17 +253,18 @@ for k = 1:T
     teacher.set('cost_y_ref_e', repmat(Xref(:,k+N),M,1));
     teacher.set('constr_x0', [repmat(xN,M,1); uprev]);
     teacher.solve();
-    okStatus = (teacher.get('status')==0);
+    okStatus = (teacher.get('status')==0);           % true SQP convergence (diagnostic)
     du0 = teacher.get('u', 0);
-    if okStatus && all(isfinite(du0))
-        uN = uprev + du0;                            % u = u_prev + du0
-    else
-        uN = uh - lqr.K*(xN - Xref(:,k));            % LQR fallback keeps plant stable
+    solved = all(isfinite(du0));                      % NMPC produced a finite SQP iterate
+    if solved
+        uN = uprev + du0;                            % apply the NMPC control (teacher = SAC-NMPC).
+    else                                             % converged or max-iter iterate; NEVER LQR.
+        uN = uprev;                                  % rare numerical failure -> hold last NMPC control
     end
     uN = min(max(uN, usat_lo), usat_hi);
     okN = okN + okStatus; uprev = uN;
-    % streaming surrogate sample (skip if any non-finite) ---------------------
-    if all(isfinite(stateHist(:))) && all(isfinite(inputHist(:)))
+    % stream ONLY genuine NMPC labels (do NOT teach the surrogate a fallback control)
+    if solved && all(isfinite(stateHist(:))) && all(isfinite(inputHist(:)))
         refLook = Xref(:, k:k+10);
         feat = surrogate_build_feature(stateHist, inputHist, refLook, zeros(12,1));
         if all(isfinite(feat))
@@ -550,12 +551,15 @@ fprintf('SURR_EVAL_DONE %d cases\n', numel(D));
 end
 
 % ---- 3-controller comparison flight ----------------------------------------
-function compare_flight(cfg, teacher, lqr, cases, sur)
-% One representative case per trajectory FAMILY; fly all three controllers on the
-% SAME reference realization and dump full position trajectories + tracking error:
+function compare_flight(cfg, teacher, lqr, cases, sur, sac)
+% One representative case per trajectory FAMILY; fly all controllers on the SAME
+% reference realization and dump full position trajectories + tracking error:
 %   (a) LQR-only        u = uh - K e
-%   (b) teacher NMPC    scenario-M5 acados solve (Bryson weights; LQR fallback)
-%   (c) proposed BLEND  u = (1-alpha) u_LQR + alpha u_sur, with alpha set by a
+%   (b) teacher NMPC    = SAC-NMPC: scenario-M5 acados with the SAC-TUNED Q,R
+%       (deterministic SAC policy a=tanh(mu)); apply the NMPC iterate every step,
+%       NO LQR fallback (teacher is pure NMPC).
+%   (c) pure surrogate  u = pi_S(state,ref) closed-loop, no safety.
+%   (d) proposed BLEND  u = (1-alpha) u_LQR + alpha u_sur, with alpha set by a
 %       one-step contraction-projected confidence rule in V=e'Pe (P=LQR Riccati):
 %         cL=max(V_k-V_{k+1}^LQR,0), cS=max(V_k-V_{k+1}^sur,0)  (contraction margins)
 %         alpha0 = cS/(cL+cS)                                   (confidence-preferred)
@@ -584,6 +588,12 @@ for f = 1:numel(uf)
         sel(f) = ids(max(1, round(numel(ids)/2)));    % middle case of the family
     end
 end
+% teacher = SAC-NMPC: use the deterministic SAC policy weights (a = tanh(mu)),
+% set ONCE (persist on the solver). This is the frozen SAC-tuned teacher.
+aMean = tanh(extractdata(sac.mu));
+[Qt, Rt] = action_to_QR(aMean, cfg); set_teacher_weights(teacher, Qt, Rt, cfg);
+fprintf('COMPARE teacher weights = SAC-NMPC (a=tanh(mu)); diag(Q)=[%s]\n', ...
+    strtrim(sprintf('%.3g ', diag(Qt))));
 D = struct('groupId',{},'family',{},'Xref',{},'xL',{},'xN',{},'xS',{},'xB',{}, ...
     'peL',{},'peN',{},'peS',{},'peB',{},'alpha',{},'okN',{});
 for ci = 1:numel(sel)
@@ -635,16 +645,18 @@ for k = 1:T
     if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
 end
 
-% (b) teacher NMPC (Bryson weights, LQR fallback on solve-fail) ---------------
-[Q0, R0] = d1_bryson_weights(cfg.plant); set_teacher_weights(teacher, Q0, R0, cfg);
+% (b) teacher = SAC-NMPC. Weights already set to the SAC policy by the caller.
+% Apply the NMPC iterate EVERY step (converged or max-iter); on a rare numerical
+% failure hold the last NMPC control. NO LQR anywhere in the teacher. okN records
+% the true SQP convergence rate as a diagnostic only.
 x = Xref(:,1); uprev = uh; warmstart_ref(teacher, Xref, 1, uh, cfg);
 for k = 1:T
     for s = 0:N-1, teacher.set('cost_y_ref', [repmat(Xref(:,k+s),M,1); uh], s); end
     teacher.set('cost_y_ref_e', repmat(Xref(:,k+N),M,1));
     teacher.set('constr_x0', [repmat(x,M,1); uprev]);
-    teacher.solve(); ok = (teacher.get('status')==0); du0 = teacher.get('u',0);
-    if ok && all(isfinite(du0)), u = uprev + du0; else, u = uh - lqr.K*(x - Xref(:,k)); end
-    u = min(max(u,lo),hi); uprev = u; okN(k) = ok;
+    teacher.solve(); okN(k) = (teacher.get('status')==0); du0 = teacher.get('u',0);
+    if all(isfinite(du0)), u = uprev + du0; else, u = uprev; end
+    u = min(max(u,lo),hi); uprev = u;
     x = quad_step_rk4(0, x, u, Ts, theta, []); xN(:,k) = x;
     if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
 end

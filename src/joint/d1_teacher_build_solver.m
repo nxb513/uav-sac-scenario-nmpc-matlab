@@ -100,7 +100,8 @@ ocp.solver_options.integrator_type = 'DISCRETE';
 % faster, more surrogate samples) vs 'SQP' (up to 30 iters, tighter labels).
 ocp.solver_options.nlp_solver_type = cfg.solverType;
 if strcmp(cfg.solverType, 'SQP')
-    ocp.solver_options.nlp_solver_max_iter = 30;
+    ocp.solver_options.nlp_solver_max_iter = 50;
+    ocp.solver_options.globalization = 'MERIT_BACKTRACKING';   % line search -> higher convergence rate
 end
 ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM';
 ocp.solver_options.qp_solver_cond_N = 5;
