@@ -569,27 +569,38 @@ for i = 1:numel(cases)
     g = cases(i).groupId; p = find(g=='|', 1); fams{i} = g(1:p-1);
 end
 uf = unique(fams, 'stable');
+hard = strcmp(getenv_str('D1_HARD','0'), '1');        % 1 = hardest (max v,a) per family
 sel = zeros(1, numel(uf));
 for f = 1:numel(uf)
     ids = find(strcmp(fams, uf{f}));
-    sel(f) = ids(max(1, round(numel(ids)/2)));       % middle case of the family
+    if hard
+        sc = zeros(numel(ids),1);
+        for t = 1:numel(ids)
+            tk = regexp(cases(ids(t)).groupId, 'v([\d.]+)\|a([\d.]+)', 'tokens', 'once');
+            sc(t) = str2double(tk{1})*100 + str2double(tk{2});   % speed dominates accel
+        end
+        [~, jj] = max(sc); sel(f) = ids(jj);          % hardest case of the family
+    else
+        sel(f) = ids(max(1, round(numel(ids)/2)));    % middle case of the family
+    end
 end
-D = struct('groupId',{},'family',{},'Xref',{},'xL',{},'xN',{},'xB',{}, ...
-    'peL',{},'peN',{},'peB',{},'alpha',{},'okN',{});
+D = struct('groupId',{},'family',{},'Xref',{},'xL',{},'xN',{},'xS',{},'xB',{}, ...
+    'peL',{},'peN',{},'peS',{},'peB',{},'alpha',{},'okN',{});
 for ci = 1:numel(sel)
     kase = cases(sel(ci));
-    [Xr, xL, xN, xB, okN, alp] = fly_compare(teacher, lqr, sur, kase, cfg);
+    [Xr, xL, xN, xS, xB, okN, alp] = fly_compare(teacher, lqr, sur, kase, cfg);
     peL = vecnorm(xL(1:3,:) - Xr(1:3,:));
     peN = vecnorm(xN(1:3,:) - Xr(1:3,:));
+    peS = vecnorm(xS(1:3,:) - Xr(1:3,:));            % pure surrogate (no safety)
     peB = vecnorm(xB(1:3,:) - Xr(1:3,:));
     D(ci).groupId = kase.groupId; D(ci).family = uf{ci};
-    D(ci).Xref = Xr; D(ci).xL = xL; D(ci).xN = xN; D(ci).xB = xB;
-    D(ci).peL = peL; D(ci).peN = peN; D(ci).peB = peB;
+    D(ci).Xref = Xr; D(ci).xL = xL; D(ci).xN = xN; D(ci).xS = xS; D(ci).xB = xB;
+    D(ci).peL = peL; D(ci).peN = peN; D(ci).peS = peS; D(ci).peB = peB;
     D(ci).alpha = alp; D(ci).okN = okN;
-    fprintf(['CMP %-16s | LQR rmse=%.3f max=%.3f | NMPC rmse=%.3f max=%.3f | ' ...
-        'BLEND rmse=%.3f max=%.3f | meanAlpha=%.2f okN=%.2f\n'], kase.groupId, ...
-        rmse_(peL), max_(peL), rmse_(peN), max_(peN), rmse_(peB), max_(peB), ...
-        mean(alp(isfinite(alp))), mean(okN));
+    fprintf(['CMP %-18s | LQR rmse=%.3f max=%.3f | NMPC rmse=%.3f max=%.3f | ' ...
+        'SUR rmse=%.3f max=%.3f | BLEND rmse=%.3f max=%.3f | meanA=%.2f okN=%.2f\n'], ...
+        kase.groupId, rmse_(peL), max_(peL), rmse_(peN), max_(peN), ...
+        rmse_(peS), max_(peS), rmse_(peB), max_(peB), mean(alp(isfinite(alp))), mean(okN));
 end
 if ~isfolder(cfg.runDir), mkdir(cfg.runDir); end
 save(fullfile(cfg.runDir, sprintf('compare_seed%d.mat', cfg.seed)), 'D', '-v7.3');
@@ -606,14 +617,14 @@ function V = lyapV(x, xref, P)
 e = x - xref; V = e.' * P * e;                        % V=e'Pe, full 12-state error
 end
 
-function [Xr, xL, xN, xB, okN, alphaTraj] = fly_compare(teacher, lqr, sur, kase, cfg)
+function [Xr, xL, xN, xS, xB, okN, alphaTraj] = fly_compare(teacher, lqr, sur, kase, cfg)
 Ts = cfg.Ts; N = cfg.N; M = cfg.M; theta = cfg.plant.nominal;
 Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
 uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
 lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
 P = lqr.P;
 Xr = Xref(:, 1:T);
-xL = nan(12,T); xN = nan(12,T); xB = nan(12,T);
+xL = nan(12,T); xN = nan(12,T); xS = nan(12,T); xB = nan(12,T);
 okN = zeros(1,T); alphaTraj = nan(1,T);
 
 % (a) LQR-only ----------------------------------------------------------------
@@ -638,7 +649,23 @@ for k = 1:T
     if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
 end
 
-% (c) proposed blend (LQR + surrogate, contraction-projected confidence) ------
+% (c) pure surrogate (open-loop imitation, NO safety) — expected to diverge on
+%     hard cases; this is the baseline the proposed blend must fix -------------
+x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
+for k = 1:T
+    feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
+    if all(isfinite(feat))
+        z = single(feat) ./ sur.featScale; pred = predict(sur.net, dlarray(z,'CB'));
+        u = double(sur.tgtMid + sur.tgtHalf .* extractdata(pred(:))); u = min(max(u,lo),hi);
+    else
+        u = uh;
+    end
+    stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
+    x = quad_step_rk4(0, x, u, Ts, theta, []); xS(:,k) = x;
+    if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
+end
+
+% (d) proposed blend (LQR + surrogate, contraction-projected confidence) ------
 ag = linspace(0, 1, 11);
 x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
 for k = 1:T

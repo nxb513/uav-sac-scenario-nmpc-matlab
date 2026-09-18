@@ -37,6 +37,11 @@ on:
         required: false
         default: "0"
         type: string
+      hard:
+        description: "1 = compare on hardest case (max v,a) per family; 0 = mid case"
+        required: false
+        default: "0"
+        type: string
       seeds:
         description: JSON array of seeds to run (1 or more)
         required: false
@@ -70,6 +75,7 @@ jobs:
       D1_DIAG: ${{ inputs.diag }}
       D1_SURR_EVAL: ${{ inputs.surr_eval }}
       D1_COMPARE: ${{ inputs.compare }}
+      D1_HARD: ${{ inputs.hard }}
       D1_SOLVER: ${{ inputs.solver }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:
