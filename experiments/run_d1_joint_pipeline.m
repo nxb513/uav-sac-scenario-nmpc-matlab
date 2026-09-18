@@ -551,12 +551,12 @@ for ci = 1:numel(sel)
         if ~all(isfinite(xS)) || norm(xS(1:3)) > 1e4, break; end
     end
     Tv = find(all(isfinite(xSt),1), 1, 'last'); if isempty(Tv), Tv = 1; end
-    ES = xSt(:,1:Tv) - Xref(:,1:Tv);
-    pe = vecnorm(xSt(1:3,1:Tv) - Xref(1:3,1:Tv));
+    ES = xSt(:,1:Tv) - Xref(:,2:Tv+1);              % align state_k with ref_{k+1}
+    pe = vecnorm(xSt(1:3,1:Tv) - Xref(1:3,2:Tv+1));
     gS = [];
     try o = d1_finite_horizon_contraction(ES, lqr.P, cfg.H, struct()); gS = o.g_H(isfinite(o.g_H)); catch, end
     cf = mean(gS < 0);
-    D(ci).groupId = kase.groupId; D(ci).Xref = Xref(:,1:Tv); D(ci).xS = xSt(:,1:Tv);
+    D(ci).groupId = kase.groupId; D(ci).Xref = Xref(:,2:Tv+1); D(ci).xS = xSt(:,1:Tv);
     D(ci).posErr = pe; D(ci).gS = gS(:).'; D(ci).contractFrac = cf;
     fprintf('SURR %s: posErr med=%.3f max=%.3f Tv=%d/%d | c_S contractFrac=%.2f\n', ...
         kase.groupId, median(pe), max(pe), Tv, T, cf);
@@ -655,7 +655,9 @@ Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
 uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
 lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
 P = lqr.P;
-Xr = Xref(:, 1:T);
+% x?(:,k) is the state AFTER integrating step k -> it must be compared with the
+% reference one step ahead, Xref(:,k+1) (matches the training reward alignment).
+Xr = Xref(:, 2:T+1);
 xL = nan(12,T); xN = nan(12,T); xS = nan(12,T); xB = nan(12,T);
 okN = zeros(1,T); alphaTraj = nan(1,T);
 
@@ -838,7 +840,7 @@ for k = 1:T
     if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
 end
 Tv = find(all(isfinite(X),1), 1, 'last'); if isempty(Tv), Tv = 1; end
-E = X(:,1:Tv) - Xref(:,1:Tv);
+E = X(:,1:Tv) - Xref(:,2:Tv+1);             % align state_k with ref_{k+1}
 end
 
 function E = rollout_error_surrogate(cfg, sur, kase)
@@ -860,5 +862,5 @@ for k = 1:T
     if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
 end
 Tv = find(all(isfinite(X),1), 1, 'last'); if isempty(Tv), Tv = 1; end
-E = X(:,1:Tv) - Xref(:,1:Tv);
+E = X(:,1:Tv) - Xref(:,2:Tv+1);             % align state_k with ref_{k+1}
 end
