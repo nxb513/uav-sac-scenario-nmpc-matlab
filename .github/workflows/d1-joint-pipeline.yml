@@ -32,6 +32,11 @@ on:
         required: false
         default: "0"
         type: string
+      compare:
+        description: "1 = compare LQR vs teacher-NMPC vs proposed blend (needs resume_run_id)"
+        required: false
+        default: "0"
+        type: string
       seeds:
         description: JSON array of seeds to run (1 or more)
         required: false
@@ -64,6 +69,7 @@ jobs:
       D1_CASES_PER_EVAL: ${{ inputs.cases_per_eval }}
       D1_DIAG: ${{ inputs.diag }}
       D1_SURR_EVAL: ${{ inputs.surr_eval }}
+      D1_COMPARE: ${{ inputs.compare }}
       D1_SOLVER: ${{ inputs.solver }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:

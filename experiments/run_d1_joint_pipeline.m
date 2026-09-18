@@ -42,6 +42,12 @@ if strcmp(getenv_str('D1_SURR_EVAL','0'), '1')
     assert(isfile(ckptPath), 'surrogate eval requires a checkpoint (set resume_run_id).');
     S = load(ckptPath); surrogate_eval(cfg, lqr, cases, S.sur); return;
 end
+if strcmp(getenv_str('D1_COMPARE','0'), '1')
+    % Fly LQR-only / teacher-NMPC / proposed(LQR+surrogate blend) on one case per
+    % family, dump full trajectories + tracking error for the comparison figures.
+    assert(isfile(ckptPath), 'compare requires a checkpoint (set resume_run_id).');
+    S = load(ckptPath); compare_flight(cfg, teacher, lqr, cases, S.sur); return;
+end
 if cfg.resume && isfile(ckptPath)
     S = load(ckptPath); sac = S.sac; sur = S.sur; st = S.st;
     rng(S.rngState);
@@ -541,4 +547,130 @@ end
 if ~isfolder(cfg.runDir), mkdir(cfg.runDir); end
 save(fullfile(cfg.runDir, sprintf('surr_eval_seed%d.mat', cfg.seed)), 'D', '-v7.3');
 fprintf('SURR_EVAL_DONE %d cases\n', numel(D));
+end
+
+% ---- 3-controller comparison flight ----------------------------------------
+function compare_flight(cfg, teacher, lqr, cases, sur)
+% One representative case per trajectory FAMILY; fly all three controllers on the
+% SAME reference realization and dump full position trajectories + tracking error:
+%   (a) LQR-only        u = uh - K e
+%   (b) teacher NMPC    scenario-M5 acados solve (Bryson weights; LQR fallback)
+%   (c) proposed BLEND  u = (1-alpha) u_LQR + alpha u_sur, with alpha set by a
+%       one-step contraction-projected confidence rule in V=e'Pe (P=LQR Riccati):
+%         cL=max(V_k-V_{k+1}^LQR,0), cS=max(V_k-V_{k+1}^sur,0)  (contraction margins)
+%         alpha0 = cS/(cL+cS)                                   (confidence-preferred)
+%         alpha* = nearest grid alpha with V_{k+1}(alpha)<=V_k  (safe-set projection),
+%                  else argmin_alpha V_{k+1}(alpha)             (least-growth fallback)
+%       => the blend never increases the LQR Lyapunov function over the step, so it
+%       is contraction-no-worse than LQR while using the surrogate where it helps.
+% Pick one case per family (mid speed/accel = middle of the family block).
+fams = cell(1, numel(cases));
+for i = 1:numel(cases)
+    g = cases(i).groupId; p = find(g=='|', 1); fams{i} = g(1:p-1);
+end
+uf = unique(fams, 'stable');
+sel = zeros(1, numel(uf));
+for f = 1:numel(uf)
+    ids = find(strcmp(fams, uf{f}));
+    sel(f) = ids(max(1, round(numel(ids)/2)));       % middle case of the family
+end
+D = struct('groupId',{},'family',{},'Xref',{},'xL',{},'xN',{},'xB',{}, ...
+    'peL',{},'peN',{},'peB',{},'alpha',{},'okN',{});
+for ci = 1:numel(sel)
+    kase = cases(sel(ci));
+    [Xr, xL, xN, xB, okN, alp] = fly_compare(teacher, lqr, sur, kase, cfg);
+    peL = vecnorm(xL(1:3,:) - Xr(1:3,:));
+    peN = vecnorm(xN(1:3,:) - Xr(1:3,:));
+    peB = vecnorm(xB(1:3,:) - Xr(1:3,:));
+    D(ci).groupId = kase.groupId; D(ci).family = uf{ci};
+    D(ci).Xref = Xr; D(ci).xL = xL; D(ci).xN = xN; D(ci).xB = xB;
+    D(ci).peL = peL; D(ci).peN = peN; D(ci).peB = peB;
+    D(ci).alpha = alp; D(ci).okN = okN;
+    fprintf(['CMP %-16s | LQR rmse=%.3f max=%.3f | NMPC rmse=%.3f max=%.3f | ' ...
+        'BLEND rmse=%.3f max=%.3f | meanAlpha=%.2f okN=%.2f\n'], kase.groupId, ...
+        rmse_(peL), max_(peL), rmse_(peN), max_(peN), rmse_(peB), max_(peB), ...
+        mean(alp(isfinite(alp))), mean(okN));
+end
+if ~isfolder(cfg.runDir), mkdir(cfg.runDir); end
+save(fullfile(cfg.runDir, sprintf('compare_seed%d.mat', cfg.seed)), 'D', '-v7.3');
+fprintf('COMPARE_DONE %d families\n', numel(D));
+end
+
+function r = rmse_(pe)
+pe = pe(isfinite(pe)); if isempty(pe), r = NaN; else, r = sqrt(mean(pe.^2)); end
+end
+function m = max_(pe)
+pe = pe(isfinite(pe)); if isempty(pe), m = NaN; else, m = max(pe); end
+end
+function V = lyapV(x, xref, P)
+e = x - xref; V = e.' * P * e;                        % V=e'Pe, full 12-state error
+end
+
+function [Xr, xL, xN, xB, okN, alphaTraj] = fly_compare(teacher, lqr, sur, kase, cfg)
+Ts = cfg.Ts; N = cfg.N; M = cfg.M; theta = cfg.plant.nominal;
+Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
+uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
+lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+P = lqr.P;
+Xr = Xref(:, 1:T);
+xL = nan(12,T); xN = nan(12,T); xB = nan(12,T);
+okN = zeros(1,T); alphaTraj = nan(1,T);
+
+% (a) LQR-only ----------------------------------------------------------------
+x = Xref(:,1);
+for k = 1:T
+    u = uh - lqr.K*(x - Xref(:,k)); u = min(max(u,lo),hi);
+    x = quad_step_rk4(0, x, u, Ts, theta, []); xL(:,k) = x;
+    if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
+end
+
+% (b) teacher NMPC (Bryson weights, LQR fallback on solve-fail) ---------------
+[Q0, R0] = d1_bryson_weights(cfg.plant); set_teacher_weights(teacher, Q0, R0, cfg);
+x = Xref(:,1); uprev = uh; warmstart_ref(teacher, Xref, 1, uh, cfg);
+for k = 1:T
+    for s = 0:N-1, teacher.set('cost_y_ref', [repmat(Xref(:,k+s),M,1); uh], s); end
+    teacher.set('cost_y_ref_e', repmat(Xref(:,k+N),M,1));
+    teacher.set('constr_x0', [repmat(x,M,1); uprev]);
+    teacher.solve(); ok = (teacher.get('status')==0); du0 = teacher.get('u',0);
+    if ok && all(isfinite(du0)), u = uprev + du0; else, u = uh - lqr.K*(x - Xref(:,k)); end
+    u = min(max(u,lo),hi); uprev = u; okN(k) = ok;
+    x = quad_step_rk4(0, x, u, Ts, theta, []); xN(:,k) = x;
+    if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
+end
+
+% (c) proposed blend (LQR + surrogate, contraction-projected confidence) ------
+ag = linspace(0, 1, 11);
+x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
+for k = 1:T
+    V = lyapV(x, Xref(:,k), P);
+    uLk = uh - lqr.K*(x - Xref(:,k)); uLk = min(max(uLk,lo),hi);
+    feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
+    if all(isfinite(feat))
+        z = single(feat) ./ sur.featScale; pred = predict(sur.net, dlarray(z,'CB'));
+        uSk = double(sur.tgtMid + sur.tgtHalf .* extractdata(pred(:)));
+        uSk = min(max(uSk,lo),hi);
+    else
+        uSk = uLk;                                   % no surrogate sample -> LQR
+    end
+    xLn = quad_step_rk4(0, x, uLk, Ts, theta, []); VL = lyapV(xLn, Xref(:,k+1), P);
+    xSn = quad_step_rk4(0, x, uSk, Ts, theta, []); VS = lyapV(xSn, Xref(:,k+1), P);
+    cL = max(V - VL, 0); cS = max(V - VS, 0);        % one-step contraction margins
+    if cL + cS > 0, a0 = cS/(cL + cS); else, a0 = 0; end
+    Vg = inf(size(ag));
+    for gi = 1:numel(ag)
+        ua = (1-ag(gi))*uLk + ag(gi)*uSk; ua = min(max(ua,lo),hi);
+        xa = quad_step_rk4(0, x, ua, Ts, theta, []);
+        if all(isfinite(xa)), Vg(gi) = lyapV(xa, Xref(:,k+1), P); end
+    end
+    safe = find(Vg <= V + 1e-9);
+    if ~isempty(safe)
+        [~, j] = min(abs(ag(safe) - a0)); astar = ag(safe(j));
+    else
+        [~, j] = min(Vg); astar = ag(j);             % least-growth fallback
+    end
+    u = (1-astar)*uLk + astar*uSk; u = min(max(u,lo),hi); alphaTraj(k) = astar;
+    stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
+    x = quad_step_rk4(0, x, u, Ts, theta, []); xB(:,k) = x;
+    if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
+end
 end
