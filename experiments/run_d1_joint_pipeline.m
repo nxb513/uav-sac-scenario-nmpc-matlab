@@ -42,11 +42,19 @@ if strcmp(getenv_str('D1_SURR_EVAL','0'), '1')
     assert(isfile(ckptPath), 'surrogate eval requires a checkpoint (set resume_run_id).');
     S = load(ckptPath); surrogate_eval(cfg, lqr, cases, S.sur); return;
 end
+if strcmp(getenv_str('D1_CONSOLIDATE','0'), '1')
+    % Train c_S and c_LQR = P(next H steps contract | error state) as logistic
+    % classifiers over LQR + surrogate closed-loop rollouts. Append to checkpoint.
+    assert(isfile(ckptPath), 'consolidate requires a checkpoint (set resume_run_id).');
+    S = load(ckptPath); consolidate_confidence(cfg, lqr, cases, S.sur, ckptPath); return;
+end
 if strcmp(getenv_str('D1_COMPARE','0'), '1')
-    % Fly LQR-only / teacher-NMPC / proposed(LQR+surrogate blend) on one case per
-    % family, dump full trajectories + tracking error for the comparison figures.
+    % Fly LQR-only / teacher-NMPC / pure surrogate / proposed(LQR+surrogate blend)
+    % on one case per family, dump trajectories + tracking error for the figures.
     assert(isfile(ckptPath), 'compare requires a checkpoint (set resume_run_id).');
-    S = load(ckptPath); compare_flight(cfg, teacher, lqr, cases, S.sur, S.sac); return;
+    S = load(ckptPath);
+    if isfield(S,'conf'), conf = S.conf; else, conf = []; end
+    compare_flight(cfg, teacher, lqr, cases, S.sur, S.sac, conf); return;
 end
 if cfg.resume && isfile(ckptPath)
     S = load(ckptPath); sac = S.sac; sur = S.sur; st = S.st;
@@ -86,9 +94,17 @@ while toc(tStart) < cfg.wallSeconds
         save_checkpoint(ckptPath, sac, sur, st, cfg); lastCkpt = tic;
     end
 end
-save_checkpoint(ckptPath, sac, sur, st, cfg);
+save_checkpoint(ckptPath, sac, sur, st, cfg);        % main checkpoint FIRST (safe)
 fprintf('D1_JOINT_DONE iters=%d samples=%d final_reward=%.4f\n', ...
     st.iter, st.totalSamples, st.lastReward);
+% ---- consolidation: train c_S and c_LQR on the FINAL surrogate + LQR ---------
+% Guarded so a failure never loses the SAC/surrogate checkpoint (re-runnable via
+% D1_CONSOLIDATE=1 from this checkpoint).
+try
+    consolidate_confidence(cfg, lqr, cases, sur, ckptPath);
+catch ME
+    fprintf('CONF_FAIL %s (main ckpt intact; re-run with D1_CONSOLIDATE=1)\n', ME.message);
+end
 end
 
 % ============================================================================
@@ -551,7 +567,7 @@ fprintf('SURR_EVAL_DONE %d cases\n', numel(D));
 end
 
 % ---- 3-controller comparison flight ----------------------------------------
-function compare_flight(cfg, teacher, lqr, cases, sur, sac)
+function compare_flight(cfg, teacher, lqr, cases, sur, sac, conf)
 % One representative case per trajectory FAMILY; fly all controllers on the SAME
 % reference realization and dump full position trajectories + tracking error:
 %   (a) LQR-only        u = uh - K e
@@ -594,11 +610,14 @@ aMean = tanh(extractdata(sac.mu));
 [Qt, Rt] = action_to_QR(aMean, cfg); set_teacher_weights(teacher, Qt, Rt, cfg);
 fprintf('COMPARE teacher weights = SAC-NMPC (a=tanh(mu)); diag(Q)=[%s]\n', ...
     strtrim(sprintf('%.3g ', diag(Qt))));
+useConf = ~isempty(conf) && isfield(conf,'S') && ~isempty(conf.S.w);
+fprintf('COMPARE blend alpha0 from %s\n', ...
+    ternary(useConf, 'TRAINED c_S/c_LQR = P(next H contract)', 'one-step V lookahead'));
 D = struct('groupId',{},'family',{},'Xref',{},'xL',{},'xN',{},'xS',{},'xB',{}, ...
     'peL',{},'peN',{},'peS',{},'peB',{},'alpha',{},'okN',{});
 for ci = 1:numel(sel)
     kase = cases(sel(ci));
-    [Xr, xL, xN, xS, xB, okN, alp] = fly_compare(teacher, lqr, sur, kase, cfg);
+    [Xr, xL, xN, xS, xB, okN, alp] = fly_compare(teacher, lqr, sur, kase, cfg, conf);
     peL = vecnorm(xL(1:3,:) - Xr(1:3,:));
     peN = vecnorm(xN(1:3,:) - Xr(1:3,:));
     peS = vecnorm(xS(1:3,:) - Xr(1:3,:));            % pure surrogate (no safety)
@@ -626,8 +645,11 @@ end
 function V = lyapV(x, xref, P)
 e = x - xref; V = e.' * P * e;                        % V=e'Pe, full 12-state error
 end
+function s = ternary(c, a, b); if c, s = a; else, s = b; end; end
 
-function [Xr, xL, xN, xS, xB, okN, alphaTraj] = fly_compare(teacher, lqr, sur, kase, cfg)
+function [Xr, xL, xN, xS, xB, okN, alphaTraj] = fly_compare(teacher, lqr, sur, kase, cfg, conf)
+if nargin < 6, conf = []; end
+useConf = ~isempty(conf) && isfield(conf,'S') && ~isempty(conf.S.w);
 Ts = cfg.Ts; N = cfg.N; M = cfg.M; theta = cfg.plant.nominal;
 Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
 uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
@@ -693,8 +715,15 @@ for k = 1:T
     end
     xLn = quad_step_rk4(0, x, uLk, Ts, theta, []); VL = lyapV(xLn, Xref(:,k+1), P);
     xSn = quad_step_rk4(0, x, uSk, Ts, theta, []); VS = lyapV(xSn, Xref(:,k+1), P);
-    cL = max(V - VL, 0); cS = max(V - VS, 0);        % one-step contraction margins
-    if cL + cS > 0, a0 = cS/(cL + cS); else, a0 = 0; end
+    if useConf
+        % confidence-preferred alpha0 from the TRAINED c_S/c_LQR = P(next H contract)
+        fk = conf_feature_online(x - Xref(:,k)).';
+        pS = predict_logistic(conf.S, fk); pL = predict_logistic(conf.LQR, fk);
+        if pS + pL > 0, a0 = pS/(pS + pL); else, a0 = 0; end
+    else
+        cL = max(V - VL, 0); cS = max(V - VS, 0);    % fallback: one-step V margins
+        if cL + cS > 0, a0 = cS/(cL + cS); else, a0 = 0; end
+    end
     Vg = inf(size(ag));
     for gi = 1:numel(ag)
         ua = (1-ag(gi))*uLk + ag(gi)*uSk; ua = min(max(ua,lo),hi);
@@ -712,4 +741,124 @@ for k = 1:T
     x = quad_step_rk4(0, x, u, Ts, theta, []); xB(:,k) = x;
     if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
 end
+end
+
+% ============================================================================
+% CONFIDENCE: c_S and c_LQR = P(next H=20 steps contract | current error state).
+% Learned as logistic classifiers over closed-loop rollouts on the SAME case bank
+% / test conditions. Label at step k = isContracting(k) (V_{k+H} < V_k in V=e'Pe,
+% P = LQR Riccati); feature = the error state e_k (+ per-group magnitudes).
+% ============================================================================
+function consolidate_confidence(cfg, lqr, cases, sur, ckptPath)
+conf = train_confidence(cfg, lqr, sur, cases);
+save(ckptPath, 'conf', '-append');                          % add to checkpoint
+save(fullfile(cfg.runDir, sprintf('conf_seed%d.mat', cfg.seed)), 'conf', '-v7.3');
+fprintf(['CONF_DONE c_S(acc=%.2f base=%.2f n=%d) c_LQR(acc=%.2f base=%.2f n=%d) ' ...
+    'H=%d featDim=%d\n'], conf.S.acc, conf.S.base, conf.S.n, conf.LQR.acc, ...
+    conf.LQR.base, conf.LQR.n, conf.H, conf.featDim);
+end
+
+function conf = train_confidence(cfg, lqr, sur, cases)
+P = lqr.P; H = cfg.H;
+nSel = min(90, numel(cases));
+sel = unique(round(linspace(1, numel(cases), nSel)));
+XL = []; yL = []; XS = []; yS = [];
+for ci = 1:numel(sel)
+    kase = cases(sel(ci));
+    EL = rollout_error_lqr(cfg, lqr, kase);
+    ES = rollout_error_surrogate(cfg, sur, kase);
+    [xl, yl] = conf_samples(EL, P, H);  XL = [XL, xl]; yL = [yL, yl]; %#ok<AGROW>
+    [xs, ys] = conf_samples(ES, P, H);  XS = [XS, xs]; yS = [yS, ys]; %#ok<AGROW>
+end
+conf.S   = fit_logistic(XS.', yS.');
+conf.LQR = fit_logistic(XL.', yL.');
+conf.H = H; conf.featDim = size(XS,1);
+conf.def = 'P(next H steps contract | error state); label = V_{k+H}<V_k in V=e''Pe';
+fprintf('CONF train: surrogate n=%d contractRate=%.2f | LQR n=%d contractRate=%.2f\n', ...
+    numel(yS), mean_or_nan(yS), numel(yL), mean_or_nan(yL));
+end
+
+function m = mean_or_nan(y); if isempty(y), m = NaN; else, m = mean(y); end; end
+
+function [X, y] = conf_samples(E, P, H)
+% feature (16-dim) + binary contract label per step with a full finite window
+if isempty(E) || size(E,2) <= H, X = zeros(16,0); y = zeros(1,0); return; end
+o = d1_finite_horizon_contraction(E, P, H, struct());
+m = o.validMask & o.windowFinite;
+Ew = E; Ew(4:6,:) = mod(Ew(4:6,:)+pi, 2*pi) - pi;
+F = conf_feature(Ew);
+X = F(:, m); y = double(o.isContracting(m));
+end
+
+function F = conf_feature(Ew)
+% 12 (wrapped) error states + 4 group magnitudes (pos/att/vel/rate)
+pos = vecnorm(Ew(1:3,:)); att = vecnorm(Ew(4:6,:));
+vel = vecnorm(Ew(7:9,:)); rate = vecnorm(Ew(10:12,:));
+F = [Ew; pos; att; vel; rate];                              % 16 x N
+end
+
+function f = conf_feature_online(e)
+ew = e; ew(4:6) = mod(ew(4:6)+pi, 2*pi) - pi;
+f = conf_feature(ew);                                       % 16 x 1
+end
+
+function clf = fit_logistic(X, y)
+% L2 logistic regression with class-balanced weights. X: n x d, y: n x 1 in {0,1}.
+if isempty(y)
+    clf = struct('w',[],'b',0,'mu',[],'sg',[],'acc',NaN,'base',NaN,'n',0); return;
+end
+y = y(:); mu = mean(X,1); sg = std(X,0,1) + 1e-6; Z = (X - mu)./sg;
+[n, d] = size(Z); w = zeros(d,1); b = 0; lr = 0.5; lam = 1e-3;
+p1 = mean(y); wpos = 1/max(p1,1e-3); wneg = 1/max(1-p1,1e-3);
+sw = y*wpos + (1-y)*wneg; sw = sw/mean(sw);
+for it = 1:800
+    p = 1./(1+exp(-(Z*w + b)));
+    g = Z.'*((p - y).*sw)/n + lam*w; gb = mean((p - y).*sw);
+    w = w - lr*g; b = b - lr*gb;
+end
+p = 1./(1+exp(-(Z*w + b)));
+clf = struct('w',w,'b',b,'mu',mu,'sg',sg,'acc',mean((p>0.5)==y),'base',mean(y),'n',n);
+end
+
+function p = predict_logistic(clf, X)
+% X: n x d -> p: n x 1 = P(contract)
+if isempty(clf) || isempty(clf.w), p = 0.5*ones(size(X,1),1); return; end
+Z = (X - clf.mu)./clf.sg; p = 1./(1+exp(-(Z*clf.w + clf.b)));
+end
+
+function E = rollout_error_lqr(cfg, lqr, kase)
+Ts = cfg.Ts; theta = cfg.plant.nominal; Xref = kase.Xref;
+T = min(cfg.stepsPerCase, size(Xref,2)-1);
+uh = [cfg.plant.m*cfg.plant.g;0;0;0];
+lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+x = Xref(:,1); X = nan(12,T);
+for k = 1:T
+    u = uh - lqr.K*(x - Xref(:,k)); u = min(max(u,lo),hi);
+    x = quad_step_rk4(0, x, u, Ts, theta, []); X(:,k) = x;
+    if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
+end
+Tv = find(all(isfinite(X),1), 1, 'last'); if isempty(Tv), Tv = 1; end
+E = X(:,1:Tv) - Xref(:,1:Tv);
+end
+
+function E = rollout_error_surrogate(cfg, sur, kase)
+Ts = cfg.Ts; theta = cfg.plant.nominal; Xref = kase.Xref;
+T = min(cfg.stepsPerCase, size(Xref,2)-11);
+uh = [cfg.plant.m*cfg.plant.g;0;0;0];
+lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4); X = nan(12,T);
+for k = 1:T
+    feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
+    if all(isfinite(feat))
+        z = single(feat) ./ sur.featScale; pred = predict(sur.net, dlarray(z,'CB'));
+        u = double(sur.tgtMid + sur.tgtHalf .* extractdata(pred(:))); u = min(max(u,lo),hi);
+    else
+        u = uh;
+    end
+    stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
+    x = quad_step_rk4(0, x, u, Ts, theta, []); X(:,k) = x;
+    if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
+end
+Tv = find(all(isfinite(X),1), 1, 'last'); if isempty(Tv), Tv = 1; end
+E = X(:,1:Tv) - Xref(:,1:Tv);
 end

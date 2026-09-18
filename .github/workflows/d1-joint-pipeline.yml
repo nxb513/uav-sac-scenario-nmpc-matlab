@@ -42,6 +42,11 @@ on:
         required: false
         default: "0"
         type: string
+      consolidate:
+        description: "1 = train c_S and c_LQR = P(next H contract) from checkpoint (needs resume_run_id)"
+        required: false
+        default: "0"
+        type: string
       seeds:
         description: JSON array of seeds to run (1 or more)
         required: false
@@ -76,6 +81,7 @@ jobs:
       D1_SURR_EVAL: ${{ inputs.surr_eval }}
       D1_COMPARE: ${{ inputs.compare }}
       D1_HARD: ${{ inputs.hard }}
+      D1_CONSOLIDATE: ${{ inputs.consolidate }}
       D1_SOLVER: ${{ inputs.solver }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:
