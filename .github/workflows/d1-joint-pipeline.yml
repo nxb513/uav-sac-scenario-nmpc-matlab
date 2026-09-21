@@ -72,6 +72,16 @@ on:
         required: false
         default: "0"
         type: string
+      c_low:
+        description: "g_L gate low threshold on c_LQR (blend hyperparameter)"
+        required: false
+        default: "0.3"
+        type: string
+      c_high:
+        description: "g_L gate high threshold on c_LQR (blend hyperparameter)"
+        required: false
+        default: "0.7"
+        type: string
 
 jobs:
   joint:
@@ -94,6 +104,8 @@ jobs:
       D1_CONSOLIDATE: ${{ inputs.consolidate }}
       D1_ALPHA_SAFE: ${{ inputs.alpha_safe }}
       D1_PLANT_PERTURB: ${{ inputs.plant_perturb }}
+      D1_C_LOW: ${{ inputs.c_low }}
+      D1_C_HIGH: ${{ inputs.c_high }}
       D1_SOLVER: ${{ inputs.solver }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:
