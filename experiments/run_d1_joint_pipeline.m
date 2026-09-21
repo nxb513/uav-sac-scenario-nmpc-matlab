@@ -23,12 +23,24 @@ if ~isfolder(cfg.runDir), mkdir(cfg.runDir); end
 rng(cfg.seed, 'twister');
 
 % ---- fixed components (built once) ------------------------------------------
+% Teacher-free modes (surrogate eval, consolidate, gate grid) never touch the
+% NMPC teacher, so they SKIP the acados build entirely -> those CI jobs need no
+% acados/CasADi toolchain.
+noTeacher = strcmp(getenv_str('D1_SURR_EVAL','0'),'1') || ...
+            strcmp(getenv_str('D1_CONSOLIDATE','0'),'1') || ...
+            strcmp(getenv_str('D1_GATE_GRID','0'),'1');
 scen = sample_scenarios(cfg);               % M=5 uncertain plant realizations
-teacher = d1_teacher_build_solver(cfg, scen);
 lqr = build_lqr(cfg);                       % K, P (Bryson LQR + Riccati)
 cases = generate_teacher_dev_cases(cfg);    % ~120 cases, 1000-step references
-fprintf('built teacher(acados M=%d Nc=%d) + LQR(P minEig=%.4g) + %d cases\n', ...
-    cfg.M, cfg.Nc, min(eig(lqr.P)), numel(cases));
+if noTeacher
+    teacher = [];
+    fprintf('teacher SKIPPED (teacher-free mode) + LQR(P minEig=%.4g) + %d cases\n', ...
+        min(eig(lqr.P)), numel(cases));
+else
+    teacher = d1_teacher_build_solver(cfg, scen);
+    fprintf('built teacher(acados M=%d Nc=%d) + LQR(P minEig=%.4g) + %d cases\n', ...
+        cfg.M, cfg.Nc, min(eig(lqr.P)), numel(cases));
+end
 
 % ---- diagnostic mode: fly a few cases, dump trajectories, exit --------------
 if strcmp(getenv_str('D1_DIAG','0'), '1')
@@ -55,6 +67,15 @@ if strcmp(getenv_str('D1_COMPARE','0'), '1')
     S = load(ckptPath);
     if isfield(S,'conf'), conf = S.conf; else, conf = []; end
     compare_flight(cfg, teacher, lqr, cases, S.sur, S.sac, conf); return;
+end
+if strcmp(getenv_str('D1_GATE_GRID','0'), '1')
+    % Evaluate ONE (c_low,c_high) gate (from D1_C_LOW/D1_C_HIGH) on the validation
+    % families: fly LQR + proposed blend (teacher-free) and report tracking RMSE.
+    % The workflow matrix sweeps the grid -> collect GATE_RESULT lines.
+    assert(isfile(ckptPath), 'gate_grid requires a consolidated checkpoint (set resume_run_id).');
+    S = load(ckptPath);
+    if isfield(S,'conf'), conf = S.conf; else, conf = []; end
+    gate_grid_flight(cfg, lqr, cases, S.sur, conf); return;
 end
 if cfg.resume && isfile(ckptPath)
     S = load(ckptPath); sac = S.sac; sur = S.sur; st = S.st;
@@ -235,6 +256,25 @@ for i = 1:cfg.M
     scen(i).alphaT = nom.alphaT*f(11);
     scen(i).alphaTau = nom.alphaTau(:).*f(12:14);
 end
+end
+
+function theta = perturb_plant(nom, scale, seed)
+% Off-nominal FLIGHT plant for the robustness test: nominal parameters scaled by
+% (1 + scale*xi.*rho), xi deterministic from seed, rho = step1 train uncertainty
+% (14x1). scale<=0 returns the nominal plant unchanged. Returns a struct in the
+% same format quad_dynamics expects (m,g,J matrix,Dv,Domega,alphaT,alphaTau).
+theta = nom;
+if scale <= 0, return; end
+rho = step1_plant_config().uncertainty.train.rho;   % 14x1
+rs  = RandStream('twister', 'Seed', seed);          % independent of the global rng
+xi  = 2*rand(rs, 14, 1) - 1;
+f   = 1 + scale * xi .* rho;
+theta.m        = nom.m * f(1);
+theta.J        = diag(diag(nom.J) .* f(2:4));        % scale diagonal inertia
+theta.Dv       = nom.Dv(:)       .* f(5:7);
+theta.Domega   = nom.Domega(:)   .* f(8:10);
+theta.alphaT   = nom.alphaT * f(11);
+theta.alphaTau = nom.alphaTau(:) .* f(12:14);
 end
 
 function set_teacher_weights(solver, Q, R, cfg)
@@ -787,6 +827,104 @@ else
     ab = inf;
 end
 ab = max(ab, 0);
+end
+
+% ============================================================================
+% GATE GRID: evaluate ONE (c_low, c_high) blend-gate setting on the validation
+% families. Teacher-free (no acados): flies only LQR-only and the proposed blend
+% u = sat(u_LQR + alpha*Delta_u), alpha = c_S*g_L(c_LQR). The CI matrix sweeps the
+% (c_low, c_high) grid; each job prints one GATE_RESULT line -> the RMSE surface.
+function gate_grid_flight(cfg, lqr, cases, sur, conf)
+assert(cfg.cHigh > cfg.cLow, 'gate grid needs c_high > c_low (got %.3f, %.3f).', ...
+    cfg.cHigh, cfg.cLow);
+haveConf = ~isempty(conf) && isfield(conf,'LQR') && ~isempty(conf.LQR.w);
+if ~haveConf
+    fprintf('GATE_WARN c_LQR MISSING in checkpoint -> g_L=0 -> blend == LQR\n');
+end
+% one case per family (mid, or hardest with D1_HARD=1) -- same set as compare
+fams = cell(1, numel(cases));
+for i = 1:numel(cases)
+    g = cases(i).groupId; p = find(g=='|', 1); fams{i} = g(1:p-1);
+end
+uf = unique(fams, 'stable');
+hard = strcmp(getenv_str('D1_HARD','0'), '1');
+sel = zeros(1, numel(uf));
+for f = 1:numel(uf)
+    ids = find(strcmp(fams, uf{f}));
+    if hard
+        sc = zeros(numel(ids),1);
+        for t = 1:numel(ids)
+            tk = regexp(cases(ids(t)).groupId, 'v([\d.]+)\|a([\d.]+)', 'tokens', 'once');
+            sc(t) = str2double(tk{1})*100 + str2double(tk{2});
+        end
+        [~, jj] = max(sc); sel(f) = ids(jj);
+    else
+        sel(f) = ids(max(1, round(numel(ids)/2)));
+    end
+end
+pscale = getenv_num('D1_PLANT_PERTURB', 0);
+theta = perturb_plant(cfg.plant.nominal, pscale, cfg.seed);
+fprintf('GATE start c_low=%.3f c_high=%.3f hard=%d pscale=%.2f alphaSafe=%d (%d families)\n', ...
+    cfg.cLow, cfg.cHigh, hard, pscale, cfg.alphaSafe, numel(uf));
+peLall = []; peBall = []; aAll = [];
+for ci = 1:numel(sel)
+    kase = cases(sel(ci));
+    [peL, peB, alp] = fly_gate(lqr, sur, kase, cfg, conf, theta);
+    peLall = [peLall, peL]; peBall = [peBall, peB]; aAll = [aAll, alp]; %#ok<AGROW>
+    fprintf('GATE_FAM %-18s | LQR rmse=%.3f | BLEND rmse=%.3f | meanA=%.2f\n', ...
+        kase.groupId, rmse_(peL), rmse_(peB), mean(alp(isfinite(alp))));
+end
+rmseB = rmse_(peBall); rmseL = rmse_(peLall);
+fprintf('GATE_RESULT c_low=%.3f c_high=%.3f rmse_blend=%.4f rmse_lqr=%.4f delta=%.4f meanA=%.3f n=%d\n', ...
+    cfg.cLow, cfg.cHigh, rmseB, rmseL, rmseB-rmseL, mean(aAll(isfinite(aAll))), numel(uf));
+if ~isfolder(cfg.runDir), mkdir(cfg.runDir); end
+res = struct('cLow',cfg.cLow,'cHigh',cfg.cHigh,'rmseB',rmseB,'rmseL',rmseL, ...
+    'meanA',mean(aAll(isfinite(aAll))),'hard',hard,'pscale',pscale,'seed',cfg.seed); %#ok<NASGU>
+save(fullfile(cfg.runDir, sprintf('gate_seed%d_cl%.2f_ch%.2f.mat', ...
+    cfg.seed, cfg.cLow, cfg.cHigh)), 'res');
+end
+
+function [peL, peB, alphaTraj] = fly_gate(lqr, sur, kase, cfg, conf, theta)
+% Teacher-free flight for gate tuning: (a) LQR-only, (d) proposed blend. Same
+% control laws and saturation as fly_compare branches (a)/(d), no NMPC teacher.
+if nargin < 6 || isempty(theta), theta = cfg.plant.nominal; end
+haveConf = ~isempty(conf) && isfield(conf,'LQR') && ~isempty(conf.LQR.w);
+Ts = cfg.Ts; N = cfg.N;
+Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
+uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
+lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+Xr = Xref(:, 2:T+1);
+xL = nan(12,T); xB = nan(12,T); alphaTraj = nan(1,T);
+% (a) LQR-only
+x = Xref(:,1);
+for k = 1:T
+    u = uh - lqr.K*(x - Xref(:,k)); u = min(max(u,lo),hi);
+    x = quad_step_rk4(0, x, u, Ts, theta, []); xL(:,k) = x;
+    if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
+end
+% (d) proposed blend: u = sat(u_LQR + alpha*Delta_u), alpha = c_S*g_L(c_LQR)
+x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
+for k = 1:T
+    e = x - Xref(:,k); uLk = uh - lqr.K*e;
+    feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
+    if all(isfinite(feat))
+        du = surrogate_predict_du(sur, feat); cS = surrogate_predict_cs(sur, feat);
+    else
+        du = zeros(4,1); cS = 0;
+    end
+    if haveConf, cLp = predict_logistic(conf.LQR, conf_feature_online(e).'); else, cLp = 0; end
+    gL = min(max((cfg.cHigh - cLp)/(cfg.cHigh - cfg.cLow), 0), 1);
+    alpha = cS * gL;
+    if cfg.alphaSafe
+        alpha = min(alpha, (1-cfg.epsSafe)*alpha_bar_est(e, du, lqr));
+    end
+    u = min(max(uLk + alpha*du, lo), hi); alphaTraj(k) = alpha;
+    stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
+    x = quad_step_rk4(0, x, u, Ts, theta, []); xB(:,k) = x;
+    if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
+end
+peL = vecnorm(xL(1:3,:) - Xr(1:3,:));
+peB = vecnorm(xB(1:3,:) - Xr(1:3,:));
 end
 
 % ============================================================================
