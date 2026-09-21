@@ -1,0 +1,587 @@
+\documentclass[11pt]{article}
+
+\usepackage{fontspec}
+\setmainfont{times.ttf}[
+  Path = ./ ,
+  BoldFont = timesbd.ttf ,
+  ItalicFont = timesi.ttf ,
+  BoldItalicFont = timesbi.ttf ]
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{titlesec}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+
+\definecolor{navy}{RGB}{20,40,90}
+\titleformat{\section}{\normalfont\Large\bfseries\color{navy}}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection}{0.5em}{}
+
+\pagestyle{fancy}\fancyhf{}
+\renewcommand{\headrulewidth}{0.2pt}
+\lhead{\small\itshape Phương pháp D1 — Điều khiển lai UAV LQR + NMPC-scenario chưng cất}
+\cfoot{\small\thepage}
+
+\newtheorem{lemma}{Bổ đề}
+\newtheorem{proposition}{Mệnh đề}
+\newtheorem{theorem}{Định lý}
+\newtheorem{assumption}{Giả thiết}
+\newtheorem{definition}{Định nghĩa}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\T}{^{\!\top}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\cS}{c_{S}}
+\newcommand{\cL}{c_{\mathrm{LQR}}}
+\newcommand{\uL}{u_{\mathrm{LQR}}}
+\newcommand{\uS}{u_{\mathrm{sur}}}
+\newcommand{\xref}{x_{\mathrm{ref}}}
+\newcommand{\Acl}{A_{\mathrm{cl}}}
+
+\setlength{\parskip}{0.35em}
+\setlength{\parindent}{0pt}
+
+\begin{document}
+
+% ===================== TITLE =====================
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+{\color{navy}\Huge\bfseries Phương pháp D1\par}
+\vspace{0.8cm}
+{\LARGE\bfseries Điều khiển lai cho UAV: LQR nền + NMPC-scenario chưng cất,\\[2mm]
+với tin cậy $\cS$ (surrogate tự đoán chất lượng bám) và $\cL$ (co rút LQR)\par}
+\vspace{1.2cm}
+{\large\itshape Tài liệu trình bày phương pháp — bản đầy đủ để kiểm tra\par}
+\vspace{2.5cm}
+\begin{minipage}{0.85\textwidth}\centering
+Bản ghi rõ: mô hình, tham số danh nghĩa, điều kiện bất định và nhiễu, tập quỹ đạo (họ, tốc độ,
+gia tốc), thiết kế LQR (Bryson), teacher NMPC-scenario $M{=}5$, SAC tinh chỉnh $Q,R$ khởi tạo Bryson,
+surrogate chưng cất, định nghĩa $\cS/\cL$, bộ điều khiển đề xuất (trộn theo tin cậy), và chứng minh
+Lyapunov.
+\end{minipage}
+\vfill
+{\itshape\small Mô phỏng; ký hiệu và tham số theo mã nguồn dự án. Nguồn tài liệu ở mục cuối.\par}
+\end{titlepage}
+
+% ===================== 0 =====================
+\section{Tóm tắt phương pháp}
+Mục tiêu: xây một \textbf{bộ điều khiển triển khai} cho UAV quadrotor \textbf{không cần giải tối ưu
+trực tuyến}, nhưng vẫn thừa hưởng chất lượng của một bộ \textbf{NMPC-scenario} mạnh và lấy \textbf{LQR làm
+nền} (phần dư chỉ bổ sung có kiểm soát; phân tích co rút là \emph{điều kiện đủ có điều kiện}, không phải
+bảo chứng ổn định cho luật lai --- xem Mục 12). Kiến trúc gồm ba thành phần và một luật hợp nhất:
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item \textbf{LQR nền} — thiết kế theo phương pháp chuẩn (tuyến tính hoá quanh hover + Riccati rời rạc),
+trọng số theo \textbf{quy tắc Bryson}. Cho ma trận Lyapunov $P$ và bộ điều khiển ổn định vùng.
+\item \textbf{Teacher = NMPC-scenario ($M{=}5$)} — bộ NMPC bền vững chạy ngoại tuyến để sinh nhãn điều
+khiển. \textbf{SAC} tinh chỉnh trọng số $Q,R$ của NMPC, \textbf{khởi tạo từ Bryson} để kết quả tốt ngay.
+\item \textbf{Surrogate chưng cất} — mạng nơ-ron nhìn trạng thái $x$ và \emph{đồng thời đoán phần dư điều
+khiển $\Delta u=u_{\mathrm{teacher}}-\uL$ và tự đoán tin cậy $\cS$} (hai đầu ra chung một mạng; chỉ học
+phần teacher làm KHÁC LQR).
+\item \textbf{Tin cậy $\cS,\cL$} — $\cS$ (do surrogate đoán, KHÔNG dùng $V$) là \emph{điểm chất lượng bám
+vị trí gần đây} (RMS sai số 20 bước vừa qua, chuẩn hoá về $[0,1]$); $\cL$ là \emph{xác suất co rút} của
+LQR (dựa trên hàm Lyapunov $V$).
+\end{itemize}
+Luật triển khai (không giải NMPC trực tuyến), dạng \emph{LQR $+$ phần dư có cổng}:
+\[
+u \;=\; \mathrm{sat}_{\mathcal U}\!\big(\uL + \alpha\,\Delta u\big), \qquad
+\alpha \;=\; \cS\cdot g_L(\cL),
+\]
+với $\Delta u$ (phần dư teacher $-$ LQR) do surrogate đoán, $\mathrm{sat}_{\mathcal U}$ là chặn biên
+actuator, và $g_L$ là \textbf{cổng do tin cậy LQR điều khiển} (Mục 11). \textbf{LQR được ưu tiên}: khi LQR
+tự tin thì $g_L\to0$ nên $u\approx\uL$; residual chỉ hoạt động mạnh khi \emph{LQR kém tin ($g_L$ lớn) VÀ
+surrogate đáng tin ($\cS$ cao)}. Nếu cả hai cùng cao $\Rightarrow$ vẫn thuần LQR.
+
+% ===================== 1 =====================
+\section{Kiến trúc tổng thể}
+Một lần huấn luyện cho mỗi hạt giống (seed) gồm \textbf{hai khối offline}. Khối A (SAC $+$ chưng cất
+residual) chạy \emph{đồng thời} --- KHÔNG đóng băng $Q,R$: surrogate chỉ nhìn trạng thái $x$ (không nhìn
+$Q,R$) nên học được ánh xạ $x\to\Delta u$ qua mọi $Q,R$ mà SAC thử, \emph{kể cả trường hợp xấu} (nhờ
+replay ưu tiên nhãn gần đây, cuối cùng hội tụ về teacher ứng với $Q,R$ mà SAC chốt); những vùng surrogate
+bám kém sẽ được $\cS$ tự hạ thấp. Khối B (huấn luyện $\cS$) tách ra CHỈ để tránh vòng phụ thuộc
+$\alpha\leftrightarrow\cS$.
+\begin{center}\small
+\begin{tabular}{@{}p{3.4cm} p{4.2cm} p{6.6cm}@{}}
+\toprule
+\textbf{Khối} & \textbf{Bộ điều khiển bay} & \textbf{Dữ liệu thu}\\
+\midrule
+A. SAC $+$ residual (đồng thời) & NMPC teacher (SAC tune $Q,R$) $+$ LQR song song &
+$Q,R$; nhãn phần dư $\Delta u^*=u_T-\uL$ (đầu $\Delta u$); nhãn co rút LQR (cho $\cL$)\\
+B. Huấn luyện $\cS$ & LQR $+$ residual NN, \textbf{$\alpha=1$} (rollout surrogate) &
+RMS sai số bám 20 bước vừa qua $\Rightarrow$ nhãn $s_k$ (đầu $\cS$)\\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{Tránh vòng phụ thuộc.} Ở Khối B, $\cS$ chưa đáng tin khi mới học, nên \emph{không} dùng ngay $\cS$
+để quyết $\alpha$ rồi lấy kết quả đó dạy lại $\cS$. Thay vào đó cho nhánh residual chạy với \textbf{luật
+cố định $\alpha=1$}: $u_k=\mathrm{sat}_{\mathcal U}(\uL+\widehat{\Delta u}_k)$, thu $(z_k,s_k)$ để huấn
+luyện đầu $\cS$ (đóng băng thân mạng $+$ đầu $\Delta u$).
+
+Toàn bộ trạng thái lưu \textbf{checkpoint}. Khi triển khai chỉ còn LQR (rẻ) $+$ surrogate (một lần suy
+luận) $+$ hai tin cậy; \textbf{không} giải NMPC --- chi phí ở mức LQR, chất lượng hướng tới NMPC.
+
+% ===================== 2 =====================
+\section{Mô hình quadrotor 12 trạng thái}
+Trạng thái $x=[\,p\,(3);\ \eta\,(3);\ v\,(3);\ \omega\,(3)\,]\in\R^{12}$ gồm vị trí $p$, góc Euler
+$\eta=(\phi,\theta,\psi)$, vận tốc $v$, tốc độ góc thân $\omega$. Đầu vào
+$u=[\,T;\ \tau_\phi;\ \tau_\theta;\ \tau_\psi\,]$ (lực đẩy tổng và ba mô-men). Khung quán tính $z$ hướng
+lên; hover tại góc $0$ dùng $T=mg$. Động lực học phi tuyến 6-DOF (Newton–Euler) tích phân bằng RK4, bước
+$T_s$.
+
+\begin{center}\small
+\begin{tabular}{@{}p{5.2cm} c p{6.2cm} c@{}}
+\toprule
+\textbf{Tham số} & \textbf{Ký hiệu} & \textbf{Giá trị} & \textbf{Đơn vị}\\
+\midrule
+Khối lượng & $m$ & $0.486$ & kg\\
+Gia tốc trọng trường & $g$ & $9.81$ & m/s$^2$\\
+Quán tính (đường chéo) & $J$ & $\mathrm{diag}(3.828,\,3.828,\,7.657)\times 10^{-3}$ & kg$\cdot$m$^2$\\
+Cánh tay đòn & $\ell$ & $0.25$ & m\\
+Cản tịnh tiến & $D_v$ & $[5.567,\,5.567,\,6.354]\times 10^{-4}$ & N$\cdot$s/m\\
+Cản quay & $D_\omega$ & $[5.567,\,5.567,\,6.354]\times 10^{-4}$ & N$\cdot$m$\cdot$s\\
+Hệ số lực/mô-men & $\alpha_T,\alpha_\tau$ & $1.0\ ;\ [1,1,1]$ & --\\
+Giới hạn lực đẩy & $T$ & $[0,\ 4mg]=[0,\ 19.07]$ & N\\
+Giới hạn mô-men & $\tau$ & $\pm0.5\,;\ \pm0.5\,;\ \pm0.25$ & N$\cdot$m\\
+\bottomrule
+\end{tabular}
+\end{center}
+{\small\itshape Nguồn: step1\_plant\_config.}
+
+% ===================== 3 =====================
+\section{Điều kiện thử nghiệm: bất định mô hình và nhiễu}
+Để bài toán có ý nghĩa bền vững, mỗi lần bay dùng \textbf{plant thật lệch danh nghĩa} (sai số mô hình) và
+\textbf{nhiễu ngoại lực/mô-men}. Teacher NMPC hedge sai số này bằng $M{=}5$ kịch bản; LQR chỉ thiết kế
+trên mô hình danh nghĩa (không biết trước lệch).
+
+\begin{center}\small
+\begin{tabular}{@{}p{5.6cm} c c@{}}
+\toprule
+\textbf{Nhóm tham số} & \textbf{train $\rho$ (in-dist.)} & \textbf{ood $\rho$}\\
+\midrule
+Khối lượng $m$ & $\pm10\%$ & $\pm25\%$\\
+Quán tính $I_x,I_y,I_z$ & $\pm5\%$ & $\pm15\%$\\
+Cản tịnh tiến $D_v$ & $\pm30\%$ & $\pm60\%$\\
+Cản quay $D_\omega$ & $\pm30\%$ & $\pm60\%$\\
+Hệ số lực đẩy $\alpha_T$ & $\pm15\%$ & $\pm30\%$\\
+Hệ số mô-men $\alpha_\tau$ & $\pm15\%$ & $\pm30\%$\\
+\bottomrule
+\end{tabular}\qquad
+\begin{tabular}{@{}p{2.6cm} c c@{}}
+\toprule
+\textbf{Nhiễu sine} & \textbf{Biên độ} & \textbf{Tần (Hz)}\\
+\midrule
+Lực $(x,y,z)$ & $[0.05,0.05,0.08]$ N & $[0.7,0.5,0.3]$\\
+Mô-men $(\phi,\theta,\psi)$ & $[2,2,1]\times10^{-3}$ N$\cdot$m & $[0.9,0.6,0.4]$\\
+\bottomrule
+\end{tabular}
+\end{center}
+{\small\itshape Nguồn: step1\_plant\_config.uncertainty và .disturbance.training.}
+
+% ===================== 4 =====================
+\section{Tập quỹ đạo tham chiếu và cấu trúc episode}
+Tập quỹ đạo có \textbf{5 họ hình học}, quét theo \textbf{tốc độ đỉnh} và \textbf{gia tốc mục tiêu}. Mỗi
+quỹ đạo dài \textbf{1000 bước $=50$ s} ($T_s=0.05$ s).
+
+\begin{center}\small
+\begin{tabular}{@{}p{4.6cm} p{9.8cm}@{}}
+\toprule
+\textbf{Thuộc tính} & \textbf{Giá trị (nguồn: targeted\_lqr\_weak\_config)}\\
+\midrule
+5 họ quỹ đạo & circle, lemniscate, vertical\_circle, spatial\_helix, smooth\_waypoints\\
+Tốc độ đỉnh (8 mốc, in-dist.) & $0.5,\ 1,\ 2,\ 4,\ 6,\ 8,\ 10,\ 12$ (m/s)\\
+Tốc độ ngoài phân phối & $14,\ 16$ (m/s)\\
+Gia tốc mục tiêu (3 mức) & $2.0$ (mild), $5.0$ (moderate), $9.0$ (hard) (m/s$^2$)\\
+Độ cao / jitter hình học & $[1,3]$ m $/\ \times[0.90,1.10]$\\
+Độ dài / bước & 1000 bước $=50$ s, $T_s=0.05$ s\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Episode và điều kiện công bằng LQR vs teacher}
+\textbf{1 episode (1 lần chấm SAC) $=$ chạy cả 5 họ quỹ đạo, mỗi họ 1000 bước}, trên plant thật có nhiễu
+$+$ sai số mô hình. \textbf{LQR chạy đúng cùng tập quỹ đạo và cùng điều kiện} với teacher, nhưng
+\textbf{độc lập từng quỹ đạo} (không hedge kịch bản như teacher) và \textbf{thiết kế vẫn trên mô hình
+danh nghĩa} — vì 5 bối cảnh lệch là không biết trước. Chia train/test theo băm (hash); tập test giữ
+nguyên.
+
+% ===================== 5 =====================
+\section{Bộ điều khiển nền LQR}
+\subsection{Phương pháp}
+Phương pháp: \textbf{LQR vô hạn thời gian, rời rạc, trên mô hình tuyến tính hoá Jacobian quanh điểm cân
+bằng hover}, giải bằng \textbf{phương trình Riccati đại số rời rạc (DARE)}.
+\begin{enumerate}[leftmargin=1.6em,itemsep=1pt]
+\item Điểm cân bằng hover: $x_h=0_{12}$, $u_h=[mg;0;0;0]$ (kiểm chứng $\dot x=0$).
+\item Tuyến tính hoá Jacobian số quanh $(x_h,u_h)$ $\rightarrow$ $(A,B)$.
+\item Rời rạc hoá giữ bậc 0 (ZOH) với $T_s=0.05$ s $\rightarrow$ $(A_d,B_d)$.
+\item Giải DARE với $(A_d,B_d,Q,R)$ $\rightarrow$ độ lợi $K$ và nghiệm Riccati $S$.
+\end{enumerate}
+\[
+u \;=\; u_h - K\,(x-\xref).
+\]
+Ma trận $\boxed{P=S}$ (nghiệm Riccati) chính là ma trận Lyapunov dùng cho tiêu chí co rút (Mục 9, 11);
+không tính lại, không dùng $Q_f$.
+
+\subsection{Chọn trọng số — quy tắc Bryson}
+Trọng số theo \textbf{quy tắc Bryson}: mỗi phần tử là nghịch đảo bình phương độ lệch tối đa chấp nhận
+được:
+\[
+Q_{ii}=\frac{1}{(e_{\mathrm{allow},i})^2},\qquad
+R_{jj}=\frac{1}{(du_{\mathrm{allow},j})^2}.
+\]
+\begin{center}\small
+\begin{tabular}{@{}p{4.6cm} c c@{}}
+\toprule
+\textbf{Kênh trạng thái} & \textbf{$e_{\mathrm{allow}}$} & \textbf{$Q_{ii}$}\\
+\midrule
+Vị trí $p_x,p_y,p_z$ (m) & $0.10$ & $100.0$\\
+Góc $\phi,\theta,\psi$ (rad) & $5^\circ=0.0873$ & $131.3$\\
+Vận tốc $v_x,v_y,v_z$ (m/s) & $0.30$ & $11.11$\\
+Tốc độ góc $p,q,r$ (rad/s) & $2.0$ & $0.25$\\
+\bottomrule
+\end{tabular}\qquad
+\begin{tabular}{@{}p{3.0cm} c c@{}}
+\toprule
+\textbf{Kênh điều khiển} & \textbf{$du_{\mathrm{allow}}$} & \textbf{$R_{jj}$}\\
+\midrule
+Lực đẩy $T$ (N) & $mg=4.768$ & $0.0440$\\
+Mô-men $\tau_\phi$ (N$\cdot$m) & $0.5$ & $4.0$\\
+Mô-men $\tau_\theta$ (N$\cdot$m) & $0.5$ & $4.0$\\
+Mô-men $\tau_\psi$ (N$\cdot$m) & $0.25$ & $16.0$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent\textbf{Minh bạch:} quy tắc Bryson được trích nguồn, nhưng các giá trị $e_{\mathrm{allow}}$ (vị
+trí $0.1$ m, tư thế $5^\circ$, vận tốc $0.3$ m/s, tốc độ góc $2$ rad/s) là \emph{dung sai thiết kế} do
+người thiết kế đặt, đúng như Bryson \& Ho yêu cầu chọn ``độ lệch tối đa chấp nhận được''. LQR dùng
+feedforward hover $u_h$ (không có feedforward theo quỹ đạo) nên là bộ điều chỉnh quanh hover — hạn chế
+đã biết khi bay xa hover.
+
+\noindent{\small\itshape Nguồn: Bouabdallah, Noth, Siegwart (IROS 2004) — LQ quadrotor tuyến tính hoá
+quanh hover; Bryson \& Ho (1975) — quy tắc Bryson; Sir Elkhatem \& Engin (2022) — Bryson cho LQR trên
+UAV; Anderson \& Moore (1990) — LQR/DARE.}
+
+% ===================== 6 =====================
+\section{Teacher: NMPC-scenario bền vững ($M=5$)}
+Teacher tối ưu \textbf{một chuỗi điều khiển duy nhất} sao cho tốt cho cả $M{=}5$ kịch bản plant bất định.
+Trạng thái tăng cường (64): $X=[\,x^{(1)}\!,\dots,x^{(5)}\,(60);\ u_{\mathrm{prev}}\,(4)\,]$; đầu vào
+$\delta u$; điều khiển áp dụng $u=u_{\mathrm{prev}}+\delta u$ (delta-u). Mỗi kịch bản $i$ tích phân RK4
+với bộ tham số lệch $\theta_i$.
+\[
+\min\ \ \frac{1}{M}\sum_{i=1}^{M}\sum_{k=0}^{N-1}
+\Big(\norm{x^{(i)}_k-x_{\mathrm{ref},k}}_{Q}^2 + \norm{u_k-u_h}_{R}^2\Big).
+\]
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item Chân trời dự báo $N=20$; chân trời điều khiển $N_c=5$ (move-blocking: $\delta u=0$ cho các stage
+$N_c,\dots,N-1$).
+\item Ràng buộc actuator áp qua chặn trạng thái $u_{\mathrm{prev}}\in[u_{\min},u_{\max}]$.
+\item Trọng số $Q,R$ \textbf{khởi tạo Bryson}, sau đó do SAC tinh chỉnh (Mục 7); cập nhật nóng
+\texttt{cost\_W} không dựng lại solver.
+\item Giải bằng \textbf{acados} (SQP thực $+$ tìm kiếm đường merit, tích phân DISCRETE, QP HPIPM), mô
+hình ký hiệu \textbf{CasADi}. $N=20,\ N_c=5,\ M=5$ là tham số cố định.
+\end{itemize}
+{\small\itshape Nguồn: scenario-MPC — Calafiore \& Campi (2006); acados — Verschueren et al. (2022);
+CasADi — Andersson et al. (2019).}
+
+\noindent{\small\itshape Giới hạn đã biết: trung bình chi phí trên $M=5$ kịch bản KHÔNG tự tạo bảo đảm
+robust trên toàn miền bất định; đây là hedge kinh nghiệm, không phải chứng nhận min--max.}
+
+% ===================== 7 =====================
+\section{SAC tinh chỉnh $Q,R$ (khởi tạo Bryson)}
+Đây là \textbf{Khối A} (Mục kiến trúc). \textbf{Ý đồ:} khởi tạo $Q,R=$ Bryson để reward \textbf{tốt
+ngay từ đầu}; SAC chỉ tinh chỉnh quanh đó. Song song, quỹ đạo \textbf{LQR} thu ở đây cho \textbf{nhãn co
+rút của $\cL$}. (Nhãn residual của teacher lấy cùng ở Khối A; nhãn $\cS$ lấy ở Khối B từ rollout
+surrogate --- KHÔNG lấy ở đây.)
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item Hành động $a\in[-1,1]^6$ ánh xạ sang \textbf{log-multiplier} cho 4 nhóm $Q$ (pos/att/vel/rate) và 2
+nhóm $R$ ($T/\tau$), dải $[10^{-1.5},10^{1.5}]$ \textbf{quanh Bryson}; $a=0\Rightarrow$ đúng Bryson.
+\item SAC dạng \textbf{bandit 1 bước} ($\gamma=0$): actor Gaussian trạng thái-độc-lập $(\mu,\log\sigma)$,
+hai critic $Q(a)$, hệ số entropy $\alpha_{\mathrm{ent}}$ tự chỉnh; cập nhật Adam.
+\item Phần thưởng episode:
+$\ r=-\big(\mathrm{RMSE}_{\mathrm{pos}} + 0.01\sqrt{\textstyle\sum\norm{\Delta u}^2}
++ 0.5\,r_{\mathrm{viol}} + 5\,r_{\mathrm{fail}}\big)$ (RMSE chặn $5$ m/bước).
+\item \textbf{Checkpoint đầy đủ} (actor/critic/target/$\alpha_{\mathrm{ent}}$/optimizer/replay $+$
+surrogate $+$ RNG $+$ $Q,R$) để \textbf{resume}.
+\end{itemize}
+{\small\itshape Nguồn: Haarnoja et al. (2018), Soft Actor-Critic. Lưu ý: dùng RL để tinh chỉnh trọng số
+MPC cố định có ít tài liệu nền; Bryson chỉ đóng vai KHỞI TẠO cho SAC. Kết quả SAC tốt trên tập train
+KHÔNG bảo đảm tổng quát hoá --- cần báo reward, ngân sách đánh giá và hiệu năng trên \emph{tập test tách
+biệt}.}
+
+% ===================== 8 =====================
+\section{Surrogate chưng cất (behavioral cloning theo dòng)}
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item \textbf{Đặc trưng 208 chiều}: lịch sử trạng thái ($12{\times}4$) $+$ lịch sử đầu vào ($4{\times}4$)
+$+$ nhìn trước tham chiếu ($12{\times}11$) $+$ phần dư ($12$).
+\item \textbf{Mạng hai đầu ra}: ký hiệu $z_k$ là đầu vào NN 208 chiều tại bước $k$. Thân chung MLP
+$208$-$128$-$128$-$128$ (swish) rẽ hai nhánh: \emph{nhánh phần dư} $\to 4$ cho $\widehat{\Delta u}$, và
+\emph{nhánh tin cậy} $\to 1$ (sigmoid) cho $\cS$.
+\item \textbf{Chuẩn hoá} cố định theo thang vật lý; huấn luyện \textbf{streaming} (adamupdate, minibatch
+$256$), \textbf{replay ưu tiên nhãn gần đây}.
+\item \textbf{Nhánh $\Delta u$ --- nhãn từ TEACHER (Khối A)}: nhãn phần dư
+$\Delta u^*_k=u_{\mathrm{teacher},k}-\uL(x_k)$ với $\uL(x_k)=u_h-K(x_k-\xref)$ (LQR tính tại \emph{cùng}
+trạng thái); chỉ nạp mẫu khi teacher cho nghiệm hữu hạn. Đây là ``chưng cất NMPC'' dạng phần dư.
+\item \textbf{Nhánh $\cS$ --- nhãn từ ROLLOUT SURROGATE (Khối B)}: học điểm $s_k=$ RMS sai số bám vị
+trí 20 bước vừa qua của rollout surrogate-residual offline (định nghĩa ở Mục 10.2).
+\end{itemize}
+Hai đầu \textbf{dùng chung thân mạng} nhưng \textbf{khác nguồn nhãn}. Mất mát chung:
+\[
+\mathcal{L}=\lambda_u\,\norm{\widehat{\Delta u}_k-\Delta u^*_k}^2+\lambda_c\,\big(\cS(z_k)-s_k\big)^2,
+\qquad \widehat{\Delta u}=\pi_\theta^{u}(z_k),\ \ \cS=\pi_\theta^{c}(z_k).
+\]
+\textbf{Lưu ý dữ liệu}: nhãn $\Delta u^*_k$ chỉ có khi teacher được tính tại đúng $x_k$. Nên ở Khối B,
+muốn cập nhật cả đầu residual thì phải \emph{gọi teacher offline tại các trạng thái surrogate đã đi qua};
+nếu không, chỉ cập nhật đầu $\cS$ và giữ đầu residual cố định.
+{\small\itshape Behavioral cloning chịu ``dịch phân phối''; hướng cải thiện mạnh nhất là DAgger (Ross et
+al., 2011). Đầu $\cS$ là cơ chế để surrogate \emph{tự biết} vùng nó bám kém.}
+
+% ===================== 9 =====================
+\section{Định nghĩa tin cậy $\cS$ và $\cL$}
+Hai tin cậy được định nghĩa theo \textbf{tiêu chí phù hợp với từng bộ điều khiển}, KHÔNG dùng chung một
+hàm $V$: $V$ là hàm Lyapunov \emph{của LQR}, nên dùng nó để chấm surrogate là không hợp lí.
+
+\subsection{$\cL$ --- dựa trên hàm Lyapunov của LQR (giữ nguyên)}
+$V(e)=e\T P e$ với $P=S$ (Riccati của LQR), $e=x-\xref$, là hàm Lyapunov tự nhiên của LQR $\Rightarrow$ đo
+co rút của LQR bằng $V$ là hợp lí. Trên cửa sổ $H=20$ bước:
+\[
+\Delta V_H(k)=V(k{+}H)-V(k),\qquad y_L(k)=\mathbf{1}\!\left[\Delta V_H(k)<0\right],
+\]
+\[
+\cL(e)=\Pr\!\big(y_L=1\mid e\big)=\sigma\!\big(w\T z(e)+b\big)\quad(\text{hồi quy logistic trên LQR vòng
+kín}),
+\]
+với $z(e)$ chuẩn hoá của $\varphi(e)=[\,e\,(12);\ \norm{e_{\mathrm{pos}}},\norm{e_{\mathrm{att}}},
+\norm{e_{\mathrm{vel}}},\norm{e_{\mathrm{rate}}}\,]\in\R^{16}$.
+
+\subsection{$\cS$ --- điểm chất lượng bám vị trí gần đây, do surrogate đoán (KHÔNG dùng $V$, KHÔNG so LQR)}
+Trên rollout surrogate, sai số bám vị trí $e^S_{p,k}=p^S_k-p_{\mathrm{ref},k}$. Lấy \textbf{RMS vị trí trên
+$20$ bước VỪA QUA}:
+\[
+E^S_{20}(k)=\sqrt{\frac{1}{20}\sum_{j=k-19}^{k}\norm{e^S_{p,j}}^2}\,.
+\]
+Chuẩn hoá RMS về $[0,1]$ với thang $\varepsilon_p$ (do người thiết kế chọn và công bố), ví dụ:
+\[
+s_k=\exp\!\left(-\Big(\frac{E^S_{20}(k)}{\varepsilon_p}\Big)^2\right)\in[0,1].
+\]
+RMS gần $0\Rightarrow s_k\to1$; RMS lớn $\Rightarrow s_k\to0$. \emph{UAV bám hoàn hảo ($e\equiv0$) suốt $20$
+bước nhận $s_k=1$}, không còn bị phạt vô lí như kiểu ``đếm số bước giảm''. (Hàm mũ chỉ là một lựa chọn
+chuẩn hoá; có thể thay bằng phép khác, miễn $\cS$ học \emph{mức} sai số bám, không phải tần suất giảm.)
+
+\begin{definition}[Tin cậy $\cS$ --- điểm chất lượng bám gần đây]
+Đầu $\cS$ của surrogate học dự đoán $s_k$ từ đầu vào NN hiện tại $z_k$:
+\[
+\cS(z_k)=\pi_\theta^{c}(z_k)\ \approx\ s_k.
+\]
+Vì cửa sổ là \textbf{20 bước vừa qua}, $\cS$ là \emph{điểm dự đoán chất lượng bám vị trí gần đây}, KHÔNG
+phải ``xác suất sai số giảm trong 20 bước tới''. Khi bay chỉ cần một lần suy luận từ $z_k$; \textbf{không
+tính cửa sổ 20 bước online}.
+\end{definition}
+
+Nhãn $s_k$ lấy từ \textbf{rollout surrogate-residual offline} (Khối B). Diễn giải: $\cS$ cao
+$\Rightarrow$ gần đây surrogate bám tốt $\Rightarrow$ đáng tin, cho residual chạy; $\cS$ thấp $\Rightarrow$
+bám kém $\Rightarrow$ kém tin. Cả $\cS,\cL\in[0,1]$.
+
+{\small\itshape Nguồn: $V$ = nghiệm Riccati là hàm Lyapunov của LQR (Anderson \& Moore, 1990); hồi quy
+logistic (Bishop, 2006).}
+
+\subsection{Ý nghĩa thống kê --- những điều $\cS,\cL$ KHÔNG bảo đảm}
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item \textbf{$\cS$ đo chất lượng bám gần đây}, không đồng nghĩa với: (i) surrogate mô phỏng đúng teacher
+(sai số chưng cất nhỏ), hay (ii) residual bảo toàn co rút Lyapunov. Ba thuộc tính này \emph{không} tương
+đương --- surrogate có thể bám tốt mà vẫn khác teacher, hoặc mô phỏng teacher đúng ở nơi cả hai đều sai số
+lớn do giới hạn vật lý. Vì vậy KHÔNG diễn giải $\cS$ là ``xác suất surrogate chính xác'' hay ``xác suất
+residual an toàn''.
+\item \textbf{Dịch phân phối:} nhãn $\cS$ thu ở $\alpha=1$ (residual đầy đủ), còn triển khai
+$\alpha=\cS g_L(\cL)$ tạo phân phối trạng thái khác. Cần \emph{kiểm định $\cS$ trên rollout của chính bộ
+điều khiển lai}, không chỉ rollout residual đầy đủ.
+\item \textbf{$\cL$ là xác suất thống kê}, không phải chứng nhận co rút: $\cL(e)=\Pr(V_{k+20}-V_k<0)$ cao
+KHÔNG bảo đảm $V_{k+1}-V_k<0$ trên plant hiện tại (nhất là khi quỹ đạo động, plant lệch, hay bão hoà). Hơn
+nữa nhãn $\cL$ dùng co rút \emph{sau 20 bước} còn phân tích Mục 12 dùng co rút \emph{từng bước} --- hai đại
+lượng khác nhau, không thay thế nhau.
+\end{itemize}
+
+% ===================== 10 =====================
+\section{Bộ điều khiển đề xuất (blend triển khai)}
+Không giải NMPC trực tuyến. LQR là ``xương sống'' và được \textbf{ưu tiên}; surrogate chỉ bổ sung
+\textbf{phần dư} $\Delta u=\pi_S^u(x)$ \emph{khi được phép}. Định nghĩa \textbf{cổng do LQR điều khiển}
+(theo tin cậy $\cL$):
+\[
+g_L(\cL)=\mathrm{clip}\!\left(\frac{c_{\mathrm{high}}-\cL}{\,c_{\mathrm{high}}-c_{\mathrm{low}}\,},\,0,\,1\right),
+\qquad 0\le c_{\mathrm{low}}<c_{\mathrm{high}}\le 1.
+\]
+Trọng số residual và luật điều khiển:
+\[
+\boxed{\,u \;=\; \mathrm{sat}_{\mathcal U}\!\big(\uL + \alpha\,\Delta u\big),\qquad
+\alpha \;=\; \underbrace{\cS}_{\substack{\text{surrogate}\\\text{đáng dùng?}}}\;\cdot\;
+\underbrace{g_L(\cL)}_{\substack{\text{LQR có cho}\\\text{residual chạy?}}}\,},\qquad \alpha\in[0,1].
+\]
+Hành vi (đúng như thiết kế):
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item $\cL\ge c_{\mathrm{high}}$ (LQR rất tự tin) $\Rightarrow g_L=0\Rightarrow \alpha=0\Rightarrow u=\uL$:
+\textbf{thuần LQR}, bất kể $\cS$ (cả hai cùng cao vẫn thuần LQR --- LQR ưu tiên).
+\item $\cL\le c_{\mathrm{low}}$ (LQR kém tin) và $\cS$ cao $\Rightarrow g_L=1,\ \alpha=\cS$ lớn
+$\Rightarrow$ \textbf{residual hoạt động mạnh} (surrogate sửa cho LQR); $\cS=1\Rightarrow u=u_{\mathrm{teacher}}$.
+\item $\cL$ thấp nhưng $\cS$ thấp $\Rightarrow \alpha$ nhỏ $\Rightarrow$ vẫn gần LQR (không tin surrogate).
+\end{itemize}
+Ý nghĩa: dùng LQR bất cứ khi nào nó đủ tin; chỉ nhường cho residual ở nơi \emph{LQR không chắc mà
+surrogate lại chắc}. $c_{\mathrm{low}},c_{\mathrm{high}}$ là ngưỡng thiết kế.
+
+\noindent\emph{Lưu ý:} đây là \textbf{cơ chế lựa chọn điều khiển dựa trên dữ liệu}, KHÔNG phải cơ chế
+chứng nhận Lyapunov. Luật này không tự bảo đảm $\alpha\le\bar\alpha(e,d)$ (ngân sách co rút ở Mục 12), nên
+tính ổn định của bộ điều khiển lai chỉ có ở dạng \emph{điều kiện đủ có điều kiện} (Mục 12), trừ khi bổ
+sung cơ chế giới hạn $\alpha_{\mathrm{safe}}$ (Mệnh đề~\ref{prop2}).
+
+% ===================== 11 =====================
+\section{Phân tích co rút (điều kiện đủ, KHÔNG phải bảo chứng cho luật lai)}
+\textbf{Phạm vi (nêu thẳng).} Phần này chỉ chứng minh một \emph{điều kiện đủ} để phần dư $\alpha\Delta u$
+bảo toàn tính co rút của $V(e)=e\T P e$, dưới các giả thiết hẹp; nó \textbf{không} khẳng định bộ điều khiển
+lai $u=\mathrm{sat}_{\mathcal U}(\uL+\alpha\Delta u)$, $\alpha=\cS g_L(\cL)$, luôn ổn định.
+
+\begin{assumption}[Phạm vi hẹp]\label{as}
+(A1) dùng mô hình \emph{tuyến tính hoá} quanh hover; (A2) actuator \emph{chưa bão hoà}; (A3) tham chiếu
+\emph{khả thi} sao cho feedforward $w_k=A_d r_k-r_{k+1}=0$ (bài toán \emph{điều chỉnh} quanh hover, KHÔNG
+phải bám quỹ đạo động tổng quát); (A4) \emph{không nhiễu, không sai số mô hình}. Ngoài ra
+$P=S=S\T\succ0$ từ DARE của $(A_d,B_d,Q,R)$, $Q,R\succ0$, $\Acl=A_d-B_dK$ Schur.
+\end{assumption}
+
+\begin{lemma}[LQR là Lyapunov, dưới A1--A4]\label{lem1}
+Dưới A1,A3,A4 sai số kín LQR là $e_{k+1}=\Acl e_k$ (vì $w_k=0$). Đồng nhất thức Riccati
+$\Acl\T S\Acl-S=-(Q+K\T RK)$ cho $\ V(e_{k+1})-V(e_k)=-\,e_k\T(Q+K\T RK)e_k<0$ với $e_k\ne0$.
+\end{lemma}
+\begin{proof}
+Thay $e_{k+1}=\Acl e_k$ vào $V$ và dùng đồng nhất thức Riccati; $Q+K\T RK\succ0$.
+\end{proof}
+\noindent Dưới A2--A4, kết quả mở rộng \emph{cục bộ} quanh hover cho plant phi tuyến bằng phương pháp gián
+tiếp Lyapunov (chỉ cho bài toán điều chỉnh, $w=0$).
+
+\subsection{Điều kiện đủ cho trọng số residual (đã sửa lỗi $q=0$)}
+Dưới A1--A4, đặt phần dư $d=\Delta u$; blend chưa bão hoà $u=\uL+\alpha d$ cho $e_{k+1}=\Acl e+\alpha B_d d$,
+nên
+\begin{equation}
+\Delta V_{\mathrm{bl}}
+= \underbrace{-\,e\T(Q+K\T RK)e}_{-\,m(e)\ <\ 0}
++\alpha\underbrace{2\,e\T\Acl\T S B_d d}_{b(e,d)}
++\alpha^2\underbrace{d\T B_d\T S B_d d}_{q(d)\ \ge\ 0}. \label{eq:dv}
+\end{equation}
+
+\begin{proposition}[Ngân sách co rút $\bar\alpha$]\label{prop}
+$\Delta V_{\mathrm{bl}}<0$ với mọi $\alpha\in[0,\bar\alpha(e,d))$, trong đó
+\[
+\bar\alpha(e,d)=
+\begin{cases}
+\dfrac{-b+\sqrt{b^2+4qm}}{2q}, & q>0,\\[2mm]
+m/b, & q=0,\ b>0,\\[1mm]
++\infty, & q=0,\ b\le0.
+\end{cases}
+\]
+Hơn nữa, vì $S\succ0$ nên $q=d\T B_d\T S B_d d=0\Rightarrow B_d d=0\Rightarrow b=2e\T\Acl\T S B_d d=0$; do
+đó với cấu trúc bài toán này nhánh $q=0$ luôn cho $\bar\alpha=+\infty$ (nhánh $q=0,b>0$ không xảy ra).
+\end{proposition}
+\begin{proof}
+$h(\alpha)=-m+b\alpha+q\alpha^2$, $h(0)=-m<0$. Với $q>0$, $h$ có đúng một nghiệm dương $\bar\alpha$, $h<0$
+trên $[0,\bar\alpha)$. Với $q=0$: $h=-m+b\alpha$ âm khi $\alpha<m/b$ nếu $b>0$, và âm mọi $\alpha\ge0$ nếu
+$b\le0$.
+\end{proof}
+
+\subsection{Khoảng trống với luật triển khai}
+Luật thực tế $\alpha=\cS\,g_L(\cL)$ chỉ bảo đảm $\alpha\in[0,1]$; \textbf{không} có ràng buộc nào ép
+$\alpha\le\bar\alpha(e,d)$. Vì vậy Mệnh đề~\ref{prop} \textbf{không} kéo theo $\Delta V<0$ cho luật lai:
+hai cổng $\cS,g_L$ là \emph{cơ chế lựa chọn dựa trên dữ liệu}, KHÔNG phải chứng nhận Lyapunov. Tài liệu do
+đó \textbf{không} khẳng định bộ điều khiển lai ổn định.
+
+\begin{proposition}[Cơ chế bảo đảm tuỳ chọn, trong phạm vi A1--A4]\label{prop2}
+Thay trọng số bằng $\ \alpha_{\mathrm{safe}}=\min\!\big\{\cS\,g_L(\cL),\,(1-\varepsilon)\,\bar\alpha(e,d)\big\}$,
+$0<\varepsilon<1$, thì $\alpha_{\mathrm{safe}}<\bar\alpha\Rightarrow\Delta V_{\mathrm{bl}}<0$ dưới A1--A4 ---
+đóng khoảng trống \emph{trong phạm vi hẹp}. Đây là điều kiện đủ có điều kiện, CHƯA xử lý (A2) bão hoà,
+(A3) tham chiếu động, (A4) nhiễu/sai số mô hình.
+\end{proposition}
+
+\subsection{Ngoài phạm vi (chưa chứng minh --- không đổi tên kết luận)}
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item \textbf{Bám quỹ đạo động ($w\ne0$):} mô hình tuyến tính hoá quanh hover có đầu vào là \emph{độ lệch}
+$(u_k-u_h)$, tức $x_{k+1}=A_d x_k+B_d(u_k-u_h)$; thay $u_k=u_h-Ke_k$ và $x_k=e_k+r_k$ được
+$e_{k+1}=\Acl e_k+w_k$ với $\boxed{w_k=A_d r_k-r_{k+1}}$ (không có số hạng $B_d u_h$). Với quỹ đạo động,
+$r_{k+1}\ne A_d r_k$ nên $w_k\ne0$: LQR chỉ có feedforward hover $u_h$, không có feedforward theo gia tốc
+quỹ đạo, nên dù $e_k=0$ vẫn có thể $e_{k+1}\ne0$. Cần đưa $w$ vào và chứng minh \emph{chặn cuối} (ISS)
+dạng $\Delta V\le-c\norm{e}^2+\gamma\norm{w}^2$ --- \emph{chưa} làm ở đây. (Trường hợp $x_h\ne0$ tổng
+quát: $w_k=x_h+A_d(r_k-x_h)-r_{k+1}$.)
+\item \textbf{Bão hoà actuator:} $u=\mathrm{sat}_{\mathcal U}(\uL+\alpha d)$; kể cả $\alpha=0$ cũng chỉ có
+$u=\mathrm{sat}_{\mathcal U}(\uL)\ne\uL$ nói chung. Bảo chứng chỉ còn khi LQR chưa bão hoà.
+\item \textbf{Nhiễu, sai số mô hình:} dưới nhiễu không triệt tiêu không thể suy $\Delta V<0$ mọi trạng thái
+$\ne0$; mục tiêu đúng là ổn định thực dụng/chặn cuối, cần chứng minh riêng và xác định miền áp dụng.
+\end{itemize}
+\noindent\textbf{Kết luận (thu hẹp).} Kết quả lý thuyết ở đây là \emph{điều kiện đủ để phần dư bảo toàn co
+rút trên mô hình tuyến tính hoá, chưa bão hoà, không nhiễu, tham chiếu cân bằng} --- KHÔNG phải định lý
+khẳng định bộ điều khiển lai luôn ổn định. Nền lý thuyết: Anderson \& Moore (1990); Khalil, \emph{Nonlinear
+Systems} (2002).
+
+% ===================== 12 =====================
+\section{Chỉ số đánh giá}
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item \textbf{Bám quỹ đạo}: RMSE và max sai số vị trí (căn lề bước $k$ so với $x_{\mathrm{ref},k+1}$).
+\item \textbf{Co rút}: fractionContracting $=$ tỉ lệ cửa sổ $H$ có $\Delta V_H<0$; $g_H$ trung bình.
+\item \textbf{Tin cậy}: độ chính xác phân loại $\cS,\cL$ và tỉ lệ nền co rút.
+\item \textbf{So sánh}: LQR thuần vs teacher NMPC vs surrogate thuần vs blend, trên plant danh nghĩa và
+\textbf{off-nominal} (cùng plant lệch cho mọi bộ điều khiển).
+\end{itemize}
+
+% ===================== 13 =====================
+\section{Bảng tham số cố định}
+\begin{center}\small
+\begin{tabular}{@{}p{5.2cm} c p{6.5cm}@{}}
+\toprule
+\textbf{Tham số} & \textbf{Ký hiệu} & \textbf{Giá trị}\\
+\midrule
+Bước thời gian & $T_s$ & $0.05$ s\\
+Chân trời dự báo & $N$ & $20$\\
+Chân trời điều khiển & $N_c$ & $5$ (move-blocking)\\
+Số kịch bản robust & $M$ & $5$\\
+Cửa sổ co rút & $H$ & $20$ bước ($1.0$ s)\\
+Trọng số cuối kỳ / delta-u & $Q_f,\,dU$ & $0,\ 0$\\
+Độ dài mỗi quỹ đạo & -- & 1000 bước $=50$ s\\
+Episode & -- & 5 họ quỹ đạo $\times$ 1000 bước\\
+Hạt giống (song song) & seed & $260914001\dots260914005$\\
+Surrogate & lr/batch/buffer & $10^{-3}$ / 256 / $10^{5}$\\
+SAC & lr/$\gamma$/batch & $3{\times}10^{-4}$ / 0 (bandit) / 256\\
+Trọng số khởi tạo & $Q,R$ & Bryson (Mục 5.2)\\
+Trọng số residual triển khai & $\alpha$ & $\cS\cdot g_L(\cL)$\\
+Ngưỡng cổng LQR & $c_{\mathrm{low}},c_{\mathrm{high}}$ & thiết kế, $0\le c_{\mathrm{low}}<c_{\mathrm{high}}\le1$\\
+Thang sai số cho $\cS$ & $\varepsilon_p$ & thiết kế, công bố (dùng trong $s_k$)\\
+Cửa sổ RMS của $\cS$ & -- & 20 bước VỪA QUA (past window)\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ===================== 14 =====================
+\section{Tài liệu tham khảo}
+\begin{enumerate}[leftmargin=2.0em,itemsep=1pt,label={[\arabic*]}]
+\item Bryson, A. E., \& Ho, Y. C. (1975). \emph{Applied Optimal Control: Optimization, Estimation and
+Control}. Hemisphere/Taylor \& Francis. (Quy tắc Bryson.)
+\item Bouabdallah, S., Noth, A., \& Siegwart, R. (2004). PID vs LQ control techniques applied to an indoor
+micro quadrotor. \emph{IEEE/RSJ IROS 2004}, vol. 3, pp. 2451--2456. DOI 10.1109/IROS.2004.1389776.
+\item Sir Elkhatem, A., \& Naci Engin, S. (2022). Robust LQR and LQR-PI control strategies based on
+adaptive weighting matrix selection for a UAV position and attitude tracking control. \emph{Alexandria
+Engineering Journal}, 61, 6275--6292.
+\item Anderson, B. D. O., \& Moore, J. B. (1990). \emph{Optimal Control: Linear Quadratic Methods}.
+Prentice-Hall.
+\item Khalil, H. K. (2002). \emph{Nonlinear Systems} (3rd ed.). Prentice-Hall.
+\item Calafiore, G. C., \& Campi, M. C. (2006). The scenario approach to robust control design. \emph{IEEE
+Transactions on Automatic Control}, 51(5), 742--753.
+\item Haarnoja, T., Zhou, A., Abbeel, P., \& Levine, S. (2018). Soft Actor-Critic: Off-Policy Maximum
+Entropy Deep RL with a Stochastic Actor. \emph{ICML 2018}.
+\item Verschueren, R., et al. (2022). acados -- a modular open-source framework for fast embedded optimal
+control. \emph{Mathematical Programming Computation}, 14, 147--183.
+\item Andersson, J. A. E., Gillis, J., Horn, G., Rawlings, J. B., \& Diehl, M. (2019). CasADi: a software
+framework for nonlinear optimization and optimal control. \emph{Mathematical Programming Computation}, 11,
+1--36.
+\item Ross, S., Gordon, G., \& Bagnell, D. (2011). A Reduction of Imitation Learning and Structured
+Prediction to No-Regret Online Learning (DAgger). \emph{AISTATS 2011}.
+\item Bishop, C. M. (2006). \emph{Pattern Recognition and Machine Learning}. Springer.
+\end{enumerate}
+
+\end{document}

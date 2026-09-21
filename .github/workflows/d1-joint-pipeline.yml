@@ -62,6 +62,16 @@ on:
         required: false
         default: ""
         type: string
+      alpha_safe:
+        description: "1 = blend uses Lyapunov safeguard alpha_safe=min(cS*gL,(1-eps)*alpha_bar)"
+        required: false
+        default: "0"
+        type: string
+      plant_perturb:
+        description: "compare off-nominal: flight plant perturb scale x train rho (0=nominal)"
+        required: false
+        default: "0"
+        type: string
 
 jobs:
   joint:
@@ -82,6 +92,8 @@ jobs:
       D1_COMPARE: ${{ inputs.compare }}
       D1_HARD: ${{ inputs.hard }}
       D1_CONSOLIDATE: ${{ inputs.consolidate }}
+      D1_ALPHA_SAFE: ${{ inputs.alpha_safe }}
+      D1_PLANT_PERTURB: ${{ inputs.plant_perturb }}
       D1_SOLVER: ${{ inputs.solver }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:

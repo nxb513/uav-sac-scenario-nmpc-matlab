@@ -46,7 +46,7 @@ if strcmp(getenv_str('D1_CONSOLIDATE','0'), '1')
     % Train c_S and c_LQR = P(next H steps contract | error state) as logistic
     % classifiers over LQR + surrogate closed-loop rollouts. Append to checkpoint.
     assert(isfile(ckptPath), 'consolidate requires a checkpoint (set resume_run_id).');
-    S = load(ckptPath); consolidate_confidence(cfg, lqr, cases, S.sur, ckptPath); return;
+    S = load(ckptPath); consolidate_confidence(cfg, lqr, cases, S.sur, S.st, ckptPath); return;
 end
 if strcmp(getenv_str('D1_COMPARE','0'), '1')
     % Fly LQR-only / teacher-NMPC / pure surrogate / proposed(LQR+surrogate blend)
@@ -97,11 +97,10 @@ end
 save_checkpoint(ckptPath, sac, sur, st, cfg);        % main checkpoint FIRST (safe)
 fprintf('D1_JOINT_DONE iters=%d samples=%d final_reward=%.4f\n', ...
     st.iter, st.totalSamples, st.lastReward);
-% ---- consolidation: train c_S and c_LQR on the FINAL surrogate + LQR ---------
-% Guarded so a failure never loses the SAC/surrogate checkpoint (re-runnable via
-% D1_CONSOLIDATE=1 from this checkpoint).
+% ---- phase B: train c_S (surrogate closed-loop alpha=1) + c_LQR (logistic) ---
+% Guarded so a failure never loses the SAC/surrogate/residual checkpoint.
 try
-    consolidate_confidence(cfg, lqr, cases, sur, ckptPath);
+    consolidate_confidence(cfg, lqr, cases, sur, st, ckptPath);
 catch ME
     fprintf('CONF_FAIL %s (main ckpt intact; re-run with D1_CONSOLIDATE=1)\n', ME.message);
 end
@@ -122,9 +121,19 @@ cfg.casesPerEval = getenv_num('D1_CASES_PER_EVAL', 20);
 cfg.plant = d1_joint_plant_params();
 cfg.actionDim = 6;                                  % Q:{pos,att,vel,rate}, R:{T,tau}
 cfg.logMultBounds = [10^-1.5, 10^1.5];              % search window around Bryson
-% surrogate
+% surrogate (2-head: residual Delta_u + confidence c_S)
 cfg.surHidden = 128; cfg.surLR = 1e-3; cfg.surBatch = 256;
 cfg.surBufferCap = 1e5; cfg.surRecentFrac = 0.5;
+cfg.resHalf = [cfg.plant.Tmax; 1; 1; 0.5];           % residual normalization scale
+% blend / confidence design params (fixed, disclosed)
+cfg.epsP   = getenv_num('D1_EPS_P',  0.5);           % c_S error scale (m): s=exp(-(RMS/epsP)^2)
+cfg.cLow   = getenv_num('D1_C_LOW',  0.3);           % g_L gate low threshold on c_LQR
+cfg.cHigh  = getenv_num('D1_C_HIGH', 0.7);           % g_L gate high threshold on c_LQR
+cfg.epsSafe= getenv_num('D1_EPS_SAFE', 0.1);         % Lyapunov safeguard margin (alpha_safe mode)
+cfg.alphaSafe = strcmp(getenv_str('D1_ALPHA_SAFE','0'),'1');
+cfg.lamU = 1; cfg.lamC = 1;                          % loss weights (on normalized targets)
+cfg.csCasesPerCall = getenv_num('D1_CS_CASES', 40);  % surrogate closed-loop cases for c_S labels
+cfg.csEpochs = getenv_num('D1_CS_EPOCHS', 300);
 % sac
 cfg.sacLR = 3e-4; cfg.sacBatch = 256; cfg.sacBufferCap = 5e4;
 cfg.sacGamma = 0.0;                                  % 1-step bandit (done each ep)
@@ -148,6 +157,7 @@ sysd = c2d(ss(A, B, eye(12), zeros(12,4)), cfg.Ts);
 [Q0, R0] = d1_bryson_weights(P);
 [K, Sr] = dlqr(sysd.A, sysd.B, Q0, R0);
 lqr.K = K; lqr.P = Sr; lqr.uh = uh; lqr.Ad = sysd.A; lqr.Bd = sysd.B;
+lqr.Q = Q0; lqr.R = R0;                               % for alpha_bar (Prop 1)
 end
 
 function [A, B] = num_linearize(f, x0, u0)
@@ -279,12 +289,14 @@ for k = 1:T
     end
     uN = min(max(uN, usat_lo), usat_hi);
     okN = okN + okStatus; uprev = uN;
-    % stream ONLY genuine NMPC labels (do NOT teach the surrogate a fallback control)
+    % stream RESIDUAL label Delta_u* = u_teacher - u_LQR(same state xN); genuine NMPC only
     if solved && all(isfinite(stateHist(:))) && all(isfinite(inputHist(:)))
         refLook = Xref(:, k:k+10);
         feat = surrogate_build_feature(stateHist, inputHist, refLook, zeros(12,1));
         if all(isfinite(feat))
-            sur = surrogate_stream_update(sur, feat, uN, st.teacherVersion, cfg);
+            uLk = uh - lqr.K*(xN - Xref(:,k));
+            uLk = min(max(uLk, usat_lo), usat_hi);
+            sur = surrogate_stream_update(sur, feat, uN - uLk, st.teacherVersion, cfg);
             st.totalSamples = st.totalSamples + 1;
         end
     end
@@ -322,21 +334,32 @@ end
 if isempty(cLdata), cLdata = zeros(0,1); end
 end
 
-% ---- surrogate --------------------------------------------------------------
+% ---- surrogate (2-head: residual Delta_u + confidence c_S) ------------------
+function net = build_two_head_net(cfg)
+% shared trunk 208-128-128-128, two heads: du (4,tanh) and cs (1,sigmoid).
+lg = layerGraph();
+trunk = [featureInputLayer(208,'Name','in','Normalization','none')
+         fullyConnectedLayer(cfg.surHidden,'Name','t1'); swishLayer('Name','s1')
+         fullyConnectedLayer(cfg.surHidden,'Name','t2'); swishLayer('Name','s2')
+         fullyConnectedLayer(cfg.surHidden,'Name','t3'); swishLayer('Name','s3')];
+lg = addLayers(lg, trunk);
+lg = addLayers(lg, [fullyConnectedLayer(4,'Name','du_fc'); tanhLayer('Name','du')]);
+lg = addLayers(lg, [fullyConnectedLayer(1,'Name','cs_fc'); sigmoidLayer('Name','cs')]);
+lg = connectLayers(lg, 's3', 'du_fc');
+lg = connectLayers(lg, 's3', 'cs_fc');
+net = dlnetwork(lg);
+end
+
 function sur = init_surrogate(cfg)
-lg = [featureInputLayer(208,'Name','in','Normalization','none')
-      fullyConnectedLayer(cfg.surHidden); swishLayer
-      fullyConnectedLayer(cfg.surHidden); swishLayer
-      fullyConnectedLayer(cfg.surHidden); swishLayer
-      fullyConnectedLayer(4); tanhLayer];
-sur.net = dlnetwork(lg);
-sur.avgG = []; sur.avgSqG = []; sur.step = 0;
+sur.net = build_two_head_net(cfg);
+sur.avgG = []; sur.avgSqG = []; sur.step = 0;      % adam state (du/trunk in phase A)
+sur.avgC = []; sur.avgSqC = []; sur.stepC = 0;     % adam state (cs head in phase B)
 sur.featScale = feature_scale();
-sur.tgtMid = [cfg.plant.m*cfg.plant.g;0;0;0];
-sur.tgtHalf = [cfg.plant.Tmax/2; 0.5; 0.5; 0.25];
+sur.resHalf = cfg.resHalf;                          % residual normalization
+% Delta_u residual buffer (phase A, teacher-driven)
 sur.buf.feat = zeros(208, cfg.surBufferCap, 'single');
-sur.buf.tgt = zeros(4, cfg.surBufferCap, 'single');
-sur.buf.ver = zeros(1, cfg.surBufferCap);
+sur.buf.tgt  = zeros(4,  cfg.surBufferCap, 'single');
+sur.buf.ver  = zeros(1,  cfg.surBufferCap);
 sur.buf.n = 0; sur.buf.pos = 0; sur.cap = cfg.surBufferCap;
 end
 
@@ -347,23 +370,34 @@ us = [40;1;1;0.5];
 s = [repmat(ss,4,1); repmat(us,4,1); repmat(ss,11,1); ss];  % 48+16+132+12=208
 end
 
-function sur = surrogate_stream_update(sur, feat, uTeacher, ver, cfg)
-% push to ring buffer
+function sur = surrogate_stream_update(sur, feat, duResidual, ver, cfg)
+% Stream a RESIDUAL label Delta_u* = u_teacher - u_LQR(same state) to the du head.
 sur.buf.pos = mod(sur.buf.pos, sur.cap) + 1;
-tgt = (uTeacher - sur.tgtMid) ./ sur.tgtHalf;
+tgt = duResidual ./ sur.resHalf;                     % normalize residual
 sur.buf.feat(:,sur.buf.pos) = single(feat ./ sur.featScale);
-sur.buf.tgt(:,sur.buf.pos) = single(min(max(tgt,-1),1));
+sur.buf.tgt(:,sur.buf.pos)  = single(min(max(tgt,-1),1));
 sur.buf.ver(sur.buf.pos) = ver;
 sur.buf.n = min(sur.buf.n + 1, sur.cap);
 if sur.buf.n < cfg.surBatch, return; end
-% recent-teacher-prioritized minibatch
 idx = sample_recent(sur.buf, ver, cfg);
 Xb = dlarray(sur.buf.feat(:,idx), 'CB');
 Yb = dlarray(sur.buf.tgt(:,idx), 'CB');
-[grad, ~] = dlfeval(@sur_loss, sur.net, Xb, Yb);
+[grad, ~] = dlfeval(@du_loss, sur.net, Xb, Yb);
 sur.step = sur.step + 1;
 [sur.net, sur.avgG, sur.avgSqG] = adamupdate(sur.net, grad, ...
     sur.avgG, sur.avgSqG, sur.step, cfg.surLR);
+end
+
+function du = surrogate_predict_du(sur, feat)
+% predicted residual Delta_u (physical units) from a raw feature vector
+z = single(feat) ./ sur.featScale;
+p = predict(sur.net, dlarray(z,'CB'), 'Outputs', 'du');
+du = double(extractdata(p(:))) .* sur.resHalf;
+end
+function c = surrogate_predict_cs(sur, feat)
+z = single(feat) ./ sur.featScale;
+p = predict(sur.net, dlarray(z,'CB'), 'Outputs', 'cs');
+c = double(extractdata(p(1)));
 end
 
 function idx = sample_recent(buf, ver, cfg)
@@ -379,10 +413,24 @@ else
 end
 end
 
-function [grad, loss] = sur_loss(net, X, Y)
-Yhat = forward(net, X);
+function [grad, loss] = du_loss(net, X, Y)
+Yhat = forward(net, X, 'Outputs', 'du');
 loss = mean((Yhat - Y).^2, 'all');
 grad = dlgradient(loss, net.Learnables);
+end
+function [grad, loss] = cs_loss(net, X, S)
+csHat = forward(net, X, 'Outputs', 'cs');
+loss = mean((csHat - S).^2, 'all');
+grad = dlgradient(loss, net.Learnables);
+end
+function grad = keep_layers(grad, names)
+% zero gradients of every learnable NOT in `names` (freeze those params)
+for i = 1:height(grad)
+    li = grad.Layer(i); if iscell(li), li = li{1}; end
+    if ~ismember(char(string(li)), names)
+        grad.Value{i} = 0*grad.Value{i};
+    end
+end
 end
 
 % ---- manual SAC (1-step bandit; per-rollout Q,R tuner) ----------------------
@@ -529,37 +577,35 @@ end
 end
 
 function surrogate_eval(cfg, lqr, cases, sur)
-% Fly the trained surrogate CLOSED-LOOP (u_S = pi_S(state,ref)), measure imitation
-% tracking + finite-horizon contraction (c_S basis). No teacher/NMPC here.
+% Fly the surrogate at alpha=1 (u = sat(u_LQR + Delta_u_hat)); report tracking +
+% mean predicted c_S per case.
 Ts = cfg.Ts; theta = cfg.plant.nominal;
 uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
 lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
 sel = unique(round(linspace(1, numel(cases), min(6, numel(cases)))));
-D = struct('groupId',{},'Xref',{},'xS',{},'xL',{},'posErr',{},'gS',{},'contractFrac',{});
+D = struct('groupId',{},'Xref',{},'xS',{},'posErr',{},'meanCS',{});
 for ci = 1:numel(sel)
     kase = cases(sel(ci)); Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-11);
     xS = Xref(:,1); stateHist = repmat(xS,1,4); inputHist = repmat(uh,1,4);
-    xSt = nan(12,T);
+    xSt = nan(12,T); csAll = nan(1,T);
     for k = 1:T
         feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
-        z = single(feat) ./ sur.featScale;
-        pred = predict(sur.net, dlarray(z,'CB'));
-        u = double(sur.tgtMid + sur.tgtHalf .* extractdata(pred(:)));
-        u = min(max(u, lo), hi);
+        uLk = uh - lqr.K*(xS - Xref(:,k));
+        if all(isfinite(feat))
+            du = surrogate_predict_du(sur, feat); csAll(k) = surrogate_predict_cs(sur, feat);
+        else, du = zeros(4,1); end
+        u = min(max(uLk + du, lo), hi);
         stateHist = [stateHist(:,2:end), xS]; inputHist = [inputHist(:,2:end), u];
         xS = quad_step_rk4(0, xS, u, Ts, theta, []); xSt(:,k) = xS;
         if ~all(isfinite(xS)) || norm(xS(1:3)) > 1e4, break; end
     end
     Tv = find(all(isfinite(xSt),1), 1, 'last'); if isempty(Tv), Tv = 1; end
-    ES = xSt(:,1:Tv) - Xref(:,2:Tv+1);              % align state_k with ref_{k+1}
     pe = vecnorm(xSt(1:3,1:Tv) - Xref(1:3,2:Tv+1));
-    gS = [];
-    try o = d1_finite_horizon_contraction(ES, lqr.P, cfg.H, struct()); gS = o.g_H(isfinite(o.g_H)); catch, end
-    cf = mean(gS < 0);
+    mcs = mean(csAll(isfinite(csAll)));
     D(ci).groupId = kase.groupId; D(ci).Xref = Xref(:,2:Tv+1); D(ci).xS = xSt(:,1:Tv);
-    D(ci).posErr = pe; D(ci).gS = gS(:).'; D(ci).contractFrac = cf;
-    fprintf('SURR %s: posErr med=%.3f max=%.3f Tv=%d/%d | c_S contractFrac=%.2f\n', ...
-        kase.groupId, median(pe), max(pe), Tv, T, cf);
+    D(ci).posErr = pe; D(ci).meanCS = mcs;
+    fprintf('SURR %s: posErr med=%.3f max=%.3f Tv=%d/%d | meanCS=%.2f\n', ...
+        kase.groupId, median(pe), max(pe), Tv, T, mcs);
 end
 if ~isfolder(cfg.runDir), mkdir(cfg.runDir); end
 save(fullfile(cfg.runDir, sprintf('surr_eval_seed%d.mat', cfg.seed)), 'D', '-v7.3');
@@ -574,15 +620,12 @@ function compare_flight(cfg, teacher, lqr, cases, sur, sac, conf)
 %   (b) teacher NMPC    = SAC-NMPC: scenario-M5 acados with the SAC-TUNED Q,R
 %       (deterministic SAC policy a=tanh(mu)); apply the NMPC iterate every step,
 %       NO LQR fallback (teacher is pure NMPC).
-%   (c) pure surrogate  u = pi_S(state,ref) closed-loop, no safety.
-%   (d) proposed BLEND  u = (1-alpha) u_LQR + alpha u_sur, with alpha set by a
-%       one-step contraction-projected confidence rule in V=e'Pe (P=LQR Riccati):
-%         cL=max(V_k-V_{k+1}^LQR,0), cS=max(V_k-V_{k+1}^sur,0)  (contraction margins)
-%         alpha0 = cS/(cL+cS)                                   (confidence-preferred)
-%         alpha* = nearest grid alpha with V_{k+1}(alpha)<=V_k  (safe-set projection),
-%                  else argmin_alpha V_{k+1}(alpha)             (least-growth fallback)
-%       => the blend never increases the LQR Lyapunov function over the step, so it
-%       is contraction-no-worse than LQR while using the surrogate where it helps.
+%   (c) surrogate alpha=1  u = sat(u_LQR + Delta_u_hat)  (full residual, no gate).
+%   (d) proposed BLEND     u = sat(u_LQR + alpha*Delta_u_hat),
+%                          alpha = c_S * g_L(c_LQR),
+%                          g_L = clip((c_high - c_LQR)/(c_high - c_low), 0, 1).
+%       c_S = surrogate cs head (recent tracking quality); c_LQR = logistic.
+%       Optional alpha_safe = min{alpha, (1-eps)*alpha_bar} when D1_ALPHA_SAFE=1.
 % Pick one case per family (mid speed/accel = middle of the family block).
 fams = cell(1, numel(cases));
 for i = 1:numel(cases)
@@ -610,9 +653,18 @@ aMean = tanh(extractdata(sac.mu));
 [Qt, Rt] = action_to_QR(aMean, cfg); set_teacher_weights(teacher, Qt, Rt, cfg);
 fprintf('COMPARE teacher weights = SAC-NMPC (a=tanh(mu)); diag(Q)=[%s]\n', ...
     strtrim(sprintf('%.3g ', diag(Qt))));
-useConf = ~isempty(conf) && isfield(conf,'S') && ~isempty(conf.S.w);
-fprintf('COMPARE blend alpha0 from %s\n', ...
-    ternary(useConf, 'TRAINED c_S/c_LQR = P(next H contract)', 'one-step V lookahead'));
+haveConf = ~isempty(conf) && isfield(conf,'LQR') && ~isempty(conf.LQR.w);
+fprintf('COMPARE blend: u=sat(u_LQR+alpha*Du), alpha=c_S*g_L(c_LQR); c_LQR %s, alphaSafe=%d\n', ...
+    ternary(haveConf, 'trained', 'MISSING(gL=0)'), cfg.alphaSafe);
+% Flight plant: nominal, or OFF-NOMINAL (same perturbed plant for ALL controllers;
+% LQR gain and the teacher model stay nominal-designed -> a fair robustness test).
+pscale = getenv_num('D1_PLANT_PERTURB', 0);
+testTheta = perturb_plant(cfg.plant.nominal, pscale, cfg.seed);
+if pscale > 0
+    fprintf('COMPARE flight plant = OFF-NOMINAL (perturb scale %.2f x train rho)\n', pscale);
+else
+    fprintf('COMPARE flight plant = nominal\n');
+end
 D = struct('groupId',{},'family',{},'Xref',{},'xL',{},'xN',{},'xS',{},'xB',{}, ...
     'peL',{},'peN',{},'peS',{},'peB',{},'alpha',{},'okN',{});
 for ci = 1:numel(sel)
@@ -647,10 +699,11 @@ e = x - xref; V = e.' * P * e;                        % V=e'Pe, full 12-state er
 end
 function s = ternary(c, a, b); if c, s = a; else, s = b; end; end
 
-function [Xr, xL, xN, xS, xB, okN, alphaTraj] = fly_compare(teacher, lqr, sur, kase, cfg, conf)
+function [Xr, xL, xN, xS, xB, okN, alphaTraj] = fly_compare(teacher, lqr, sur, kase, cfg, conf, theta)
 if nargin < 6, conf = []; end
-useConf = ~isempty(conf) && isfield(conf,'S') && ~isempty(conf.S.w);
-Ts = cfg.Ts; N = cfg.N; M = cfg.M; theta = cfg.plant.nominal;
+if nargin < 7 || isempty(theta), theta = cfg.plant.nominal; end  % flight plant
+haveConf = ~isempty(conf) && isfield(conf,'LQR') && ~isempty(conf.LQR.w);
+Ts = cfg.Ts; N = cfg.N; M = cfg.M;
 Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
 uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
 lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
@@ -685,64 +738,55 @@ for k = 1:T
     if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
 end
 
-% (c) pure surrogate (open-loop imitation, NO safety) — expected to diverge on
-%     hard cases; this is the baseline the proposed blend must fix -------------
+% (c) surrogate at alpha=1: u = sat(u_LQR + Delta_u_hat) -- full residual, no gate
 x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
 for k = 1:T
     feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
-    if all(isfinite(feat))
-        z = single(feat) ./ sur.featScale; pred = predict(sur.net, dlarray(z,'CB'));
-        u = double(sur.tgtMid + sur.tgtHalf .* extractdata(pred(:))); u = min(max(u,lo),hi);
-    else
-        u = uh;
-    end
+    uLk = uh - lqr.K*(x - Xref(:,k));
+    if all(isfinite(feat)), du = surrogate_predict_du(sur, feat); else, du = zeros(4,1); end
+    u = min(max(uLk + du, lo), hi);
     stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
     x = quad_step_rk4(0, x, u, Ts, theta, []); xS(:,k) = x;
     if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
 end
 
-% (d) proposed blend (LQR + surrogate, contraction-projected confidence) ------
-ag = linspace(0, 1, 11);
+% (d) proposed blend: u = sat(u_LQR + alpha*Delta_u), alpha = c_S * g_L(c_LQR) ---
 x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
 for k = 1:T
-    V = lyapV(x, Xref(:,k), P);
-    uLk = uh - lqr.K*(x - Xref(:,k)); uLk = min(max(uLk,lo),hi);
+    e = x - Xref(:,k); uLk = uh - lqr.K*e;
     feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
     if all(isfinite(feat))
-        z = single(feat) ./ sur.featScale; pred = predict(sur.net, dlarray(z,'CB'));
-        uSk = double(sur.tgtMid + sur.tgtHalf .* extractdata(pred(:)));
-        uSk = min(max(uSk,lo),hi);
+        du = surrogate_predict_du(sur, feat); cS = surrogate_predict_cs(sur, feat);
     else
-        uSk = uLk;                                   % no surrogate sample -> LQR
+        du = zeros(4,1); cS = 0;
     end
-    xLn = quad_step_rk4(0, x, uLk, Ts, theta, []); VL = lyapV(xLn, Xref(:,k+1), P);
-    xSn = quad_step_rk4(0, x, uSk, Ts, theta, []); VS = lyapV(xSn, Xref(:,k+1), P);
-    if useConf
-        % confidence-preferred alpha0 from the TRAINED c_S/c_LQR = P(next H contract)
-        fk = conf_feature_online(x - Xref(:,k)).';
-        pS = predict_logistic(conf.S, fk); pL = predict_logistic(conf.LQR, fk);
-        if pS + pL > 0, a0 = pS/(pS + pL); else, a0 = 0; end
-    else
-        cL = max(V - VL, 0); cS = max(V - VS, 0);    % fallback: one-step V margins
-        if cL + cS > 0, a0 = cS/(cL + cS); else, a0 = 0; end
+    if haveConf, cLp = predict_logistic(conf.LQR, conf_feature_online(e).'); else, cLp = 0; end
+    gL = min(max((cfg.cHigh - cLp)/(cfg.cHigh - cfg.cLow), 0), 1);
+    alpha = cS * gL;
+    if cfg.alphaSafe
+        alpha = min(alpha, (1-cfg.epsSafe)*alpha_bar_est(e, du, lqr));
     end
-    Vg = inf(size(ag));
-    for gi = 1:numel(ag)
-        ua = (1-ag(gi))*uLk + ag(gi)*uSk; ua = min(max(ua,lo),hi);
-        xa = quad_step_rk4(0, x, ua, Ts, theta, []);
-        if all(isfinite(xa)), Vg(gi) = lyapV(xa, Xref(:,k+1), P); end
-    end
-    safe = find(Vg <= V + 1e-9);
-    if ~isempty(safe)
-        [~, j] = min(abs(ag(safe) - a0)); astar = ag(safe(j));
-    else
-        [~, j] = min(Vg); astar = ag(j);             % least-growth fallback
-    end
-    u = (1-astar)*uLk + astar*uSk; u = min(max(u,lo),hi); alphaTraj(k) = astar;
+    u = min(max(uLk + alpha*du, lo), hi); alphaTraj(k) = alpha;
     stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
     x = quad_step_rk4(0, x, u, Ts, theta, []); xB(:,k) = x;
     if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
 end
+end
+
+function ab = alpha_bar_est(e, d, lqr)
+% linearized one-step contraction budget alpha_bar (Prop 1); d = residual Delta_u
+Acl = lqr.Ad - lqr.Bd*lqr.K; S = lqr.P;
+m = e.'*(lqr.Q + lqr.K.'*lqr.R*lqr.K)*e;
+b = 2 * e.'*Acl.'*S*lqr.Bd*d;
+q = d.'*lqr.Bd.'*S*lqr.Bd*d;
+if q > 1e-12
+    ab = (-b + sqrt(max(b^2 + 4*q*m,0)))/(2*q);
+elseif b > 1e-12
+    ab = m/b;
+else
+    ab = inf;
+end
+ab = max(ab, 0);
 end
 
 % ============================================================================
@@ -751,36 +795,76 @@ end
 % / test conditions. Label at step k = isContracting(k) (V_{k+H} < V_k in V=e'Pe,
 % P = LQR Riccati); feature = the error state e_k (+ per-group magnitudes).
 % ============================================================================
-function consolidate_confidence(cfg, lqr, cases, sur, ckptPath)
-conf = train_confidence(cfg, lqr, sur, cases);
-save(ckptPath, 'conf', '-append');                          % add to checkpoint
+function consolidate_confidence(cfg, lqr, cases, sur, st, ckptPath) %#ok<INUSD>
+% Phase B: train c_S head (surrogate closed-loop alpha=1 tracking RMS) + c_LQR
+% logistic (LQR V-contraction). Append updated surrogate + conf to checkpoint.
+sur = train_cS_head(cfg, lqr, cases, sur);
+confLQR = train_cLQR(cfg, lqr, cases);
+conf.LQR = confLQR; conf.epsP = cfg.epsP; conf.H = cfg.H;
+conf.def = ['c_S=exp(-(RMS_pastH_pos/epsP)^2) predicted by surrogate cs head; ' ...
+    'c_LQR=logistic P(V_{k+H}<V_k)'];
+save(ckptPath, 'sur', 'conf', '-append');
 save(fullfile(cfg.runDir, sprintf('conf_seed%d.mat', cfg.seed)), 'conf', '-v7.3');
-fprintf(['CONF_DONE c_S(acc=%.2f base=%.2f n=%d) c_LQR(acc=%.2f base=%.2f n=%d) ' ...
-    'H=%d featDim=%d\n'], conf.S.acc, conf.S.base, conf.S.n, conf.LQR.acc, ...
-    conf.LQR.base, conf.LQR.n, conf.H, conf.featDim);
+fprintf('CONF_DONE c_LQR(acc=%.2f base=%.2f n=%d) epsP=%.3g\n', ...
+    confLQR.acc, confLQR.base, confLQR.n, cfg.epsP);
 end
 
-function conf = train_confidence(cfg, lqr, sur, cases)
-P = lqr.P; H = cfg.H;
-nSel = min(90, numel(cases));
+function sur = train_cS_head(cfg, lqr, cases, sur)
+% Fly surrogate closed-loop at alpha=1: u=sat(u_LQR+Delta_u_hat). Collect
+% (feature z_k, s_k), s_k=exp(-(RMS pos err over PAST H steps / epsP)^2). Train
+% ONLY the cs head (freeze trunk + du head).
+Ts=cfg.Ts; theta=cfg.plant.nominal; H=cfg.H; uh=[cfg.plant.m*cfg.plant.g;0;0;0];
+lo=[0;-0.5;-0.5;-0.25]; hi=[cfg.plant.Tmax;0.5;0.5;0.25];
+nSel = min(cfg.csCasesPerCall, numel(cases));
 sel = unique(round(linspace(1, numel(cases), nSel)));
-XL = []; yL = []; XS = []; yS = [];
+Zall = zeros(208,0,'single'); Sall = zeros(1,0,'single');
 for ci = 1:numel(sel)
-    kase = cases(sel(ci));
-    EL = rollout_error_lqr(cfg, lqr, kase);
-    ES = rollout_error_surrogate(cfg, sur, kase);
-    [xl, yl] = conf_samples(EL, P, H);  XL = [XL, xl]; yL = [yL, yl]; %#ok<AGROW>
-    [xs, ys] = conf_samples(ES, P, H);  XS = [XS, xs]; yS = [yS, ys]; %#ok<AGROW>
+    kase = cases(sel(ci)); Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-11);
+    x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
+    feats = zeros(208, T); perr = nan(1,T); nok = 0;
+    for k = 1:T
+        feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
+        if ~all(isfinite(feat)), break; end
+        uLk = uh - lqr.K*(x - Xref(:,k));
+        du  = surrogate_predict_du(sur, feat);
+        u = min(max(uLk + du, lo), hi);                  % alpha = 1
+        feats(:,k) = single(feat) ./ sur.featScale;
+        stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
+        x = quad_step_rk4(0, x, u, Ts, theta, []);
+        if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
+        perr(k) = norm(x(1:3) - Xref(1:3,k+1)); nok = k;
+    end
+    for k = H:nok
+        wv = perr(k-H+1:k); wv = wv(isfinite(wv));
+        if isempty(wv), continue; end
+        E20 = sqrt(mean(wv.^2)); sk = exp(-(E20/cfg.epsP)^2);
+        Zall(:,end+1) = feats(:,k); Sall(end+1) = single(sk); %#ok<AGROW>
+    end
 end
-conf.S   = fit_logistic(XS.', yS.');
-conf.LQR = fit_logistic(XL.', yL.');
-conf.H = H; conf.featDim = size(XS,1);
-conf.def = 'P(next H steps contract | error state); label = V_{k+H}<V_k in V=e''Pe';
-fprintf('CONF train: surrogate n=%d contractRate=%.2f | LQR n=%d contractRate=%.2f\n', ...
-    numel(yS), mean_or_nan(yS), numel(yL), mean_or_nan(yL));
+nAll = numel(Sall);
+if nAll == 0, fprintf('CS_TRAIN: no samples\n'); return; end
+for ep = 1:cfg.csEpochs
+    idx = randi(nAll, 1, min(cfg.surBatch, nAll));
+    Xb = dlarray(Zall(:,idx),'CB'); Sb = dlarray(Sall(idx),'CB');
+    [g,~] = dlfeval(@cs_loss, sur.net, Xb, Sb);
+    g = keep_layers(g, {'cs_fc'});
+    sur.stepC = sur.stepC + 1;
+    [sur.net, sur.avgC, sur.avgSqC] = adamupdate(sur.net, g, sur.avgC, sur.avgSqC, sur.stepC, cfg.surLR);
+end
+pcs = extractdata(predict(sur.net, dlarray(Zall,'CB'),'Outputs','cs'));
+fprintf('CS_TRAIN n=%d meanS=%.3f meanPredCS=%.3f\n', nAll, mean(Sall), mean(pcs));
 end
 
-function m = mean_or_nan(y); if isempty(y), m = NaN; else, m = mean(y); end; end
+function confLQR = train_cLQR(cfg, lqr, cases)
+P = lqr.P; H = cfg.H; nSel = min(60, numel(cases));
+sel = unique(round(linspace(1, numel(cases), nSel)));
+XL = []; yL = [];
+for ci = 1:numel(sel)
+    EL = rollout_error_lqr(cfg, lqr, cases(sel(ci)));
+    [xl, yl] = conf_samples(EL, P, H); XL=[XL,xl]; yL=[yL,yl]; %#ok<AGROW>
+end
+confLQR = fit_logistic(XL.', yL.');
+end
 
 function [X, y] = conf_samples(E, P, H)
 % feature (16-dim) + binary contract label per step with a full finite window
@@ -836,28 +920,6 @@ lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
 x = Xref(:,1); X = nan(12,T);
 for k = 1:T
     u = uh - lqr.K*(x - Xref(:,k)); u = min(max(u,lo),hi);
-    x = quad_step_rk4(0, x, u, Ts, theta, []); X(:,k) = x;
-    if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
-end
-Tv = find(all(isfinite(X),1), 1, 'last'); if isempty(Tv), Tv = 1; end
-E = X(:,1:Tv) - Xref(:,2:Tv+1);             % align state_k with ref_{k+1}
-end
-
-function E = rollout_error_surrogate(cfg, sur, kase)
-Ts = cfg.Ts; theta = cfg.plant.nominal; Xref = kase.Xref;
-T = min(cfg.stepsPerCase, size(Xref,2)-11);
-uh = [cfg.plant.m*cfg.plant.g;0;0;0];
-lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
-x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4); X = nan(12,T);
-for k = 1:T
-    feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
-    if all(isfinite(feat))
-        z = single(feat) ./ sur.featScale; pred = predict(sur.net, dlarray(z,'CB'));
-        u = double(sur.tgtMid + sur.tgtHalf .* extractdata(pred(:))); u = min(max(u,lo),hi);
-    else
-        u = uh;
-    end
-    stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
     x = quad_step_rk4(0, x, u, Ts, theta, []); X(:,k) = x;
     if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
 end
