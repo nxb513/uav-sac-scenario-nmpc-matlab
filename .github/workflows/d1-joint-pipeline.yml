@@ -87,6 +87,11 @@ on:
         required: false
         default: "0"
         type: string
+      logmult_dec:
+        description: "SAC Q,R search half-width in decades (1.5=wide default; 0.5=tight, near Bryson)"
+        required: false
+        default: "1.5"
+        type: string
 
 jobs:
   joint:
@@ -112,6 +117,7 @@ jobs:
       D1_C_LOW: ${{ inputs.c_low }}
       D1_C_HIGH: ${{ inputs.c_high }}
       D1_RANDOM_QR: ${{ inputs.random_qr }}
+      D1_LOGMULT_DEC: ${{ inputs.logmult_dec }}
       D1_SOLVER: ${{ inputs.solver }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:

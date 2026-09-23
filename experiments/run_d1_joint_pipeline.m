@@ -141,7 +141,11 @@ cfg.stepsPerCase = getenv_num('D1_STEPS', 1000);
 cfg.casesPerEval = getenv_num('D1_CASES_PER_EVAL', 20);
 cfg.plant = d1_joint_plant_params();
 cfg.actionDim = 6;                                  % Q:{pos,att,vel,rate}, R:{T,tau}
-cfg.logMultBounds = [10^-1.5, 10^1.5];              % search window around the Q,R base
+% SAC Q,R search half-width in decades around the base (mult in 10^[-dec, +dec]).
+% Default 1.5 (0.03x..32x, wide). Smaller = SAC stays CLOSER to Bryson (e.g. 0.5 =
+% 0.32x..3.2x) -> teacher can't be pushed into an unsolvable corner.
+cfg.logMultDec = getenv_num('D1_LOGMULT_DEC', 1.5);
+cfg.logMultBounds = [10^(-cfg.logMultDec), 10^(cfg.logMultDec)];
 % Q,R base for the SAC-tuned teacher: 0 = Bryson warm-start (default), 1 = RANDOM
 % (no Bryson) log-uniform diag weights, deterministic per seed. Ablation: does the
 % Bryson warm-start matter? The LQR baseline stays Bryson in BOTH (fixed yardstick).
