@@ -141,7 +141,12 @@ cfg.stepsPerCase = getenv_num('D1_STEPS', 1000);
 cfg.casesPerEval = getenv_num('D1_CASES_PER_EVAL', 20);
 cfg.plant = d1_joint_plant_params();
 cfg.actionDim = 6;                                  % Q:{pos,att,vel,rate}, R:{T,tau}
-cfg.logMultBounds = [10^-1.5, 10^1.5];              % search window around Bryson
+cfg.logMultBounds = [10^-1.5, 10^1.5];              % search window around the Q,R base
+% Q,R base for the SAC-tuned teacher: 0 = Bryson warm-start (default), 1 = RANDOM
+% (no Bryson) log-uniform diag weights, deterministic per seed. Ablation: does the
+% Bryson warm-start matter? The LQR baseline stays Bryson in BOTH (fixed yardstick).
+cfg.randomQR = strcmp(getenv_str('D1_RANDOM_QR','0'),'1');
+cfg.rqrLog   = [-2, 2];                              % random base: 10^[-2,2] per weight
 % surrogate (2-head: residual Delta_u + confidence c_S)
 cfg.surHidden = 128; cfg.surLR = 1e-3; cfg.surBatch = 256;
 cfg.surBufferCap = 1e5; cfg.surRecentFrac = 0.5;
@@ -229,7 +234,7 @@ end
 
 % ---- action -> Q,R ----------------------------------------------------------
 function [Q, R] = action_to_QR(a, cfg)
-[Q0, R0] = d1_bryson_weights(cfg.plant);
+[Q0, R0] = qr_base(cfg);                            % Bryson, or random (no-Bryson)
 lo = log(cfg.logMultBounds(1)); hi = log(cfg.logMultBounds(2));
 mult = exp(lo + 0.5*(a(:)+1)*(hi-lo));              % 6 log-multipliers
 q = diag(Q0);
@@ -237,6 +242,21 @@ q(1:3)=q(1:3)*mult(1); q(4:6)=q(4:6)*mult(2);
 q(7:9)=q(7:9)*mult(3); q(10:12)=q(10:12)*mult(4);
 r = diag(R0); r(1)=r(1)*mult(5); r(2:4)=r(2:4)*mult(6);
 Q = diag(q); R = diag(r);
+end
+
+function [Q0, R0] = qr_base(cfg)
+% Base Q,R for the SAC-tuned teacher. Default = Bryson (1/e_allow^2, 1/du_allow^2).
+% D1_RANDOM_QR=1 -> random diagonal weights, log-uniform 10^cfg.rqrLog per element,
+% deterministic per seed (ablation vs Bryson warm-start). NOTE: only the TEACHER
+% base changes; build_lqr keeps Bryson so the LQR yardstick is identical across both.
+if cfg.randomQR
+    rs = RandStream('twister', 'Seed', cfg.seed + 90210);   % independent of global rng
+    lo = cfg.rqrLog(1); span = cfg.rqrLog(2) - cfg.rqrLog(1);
+    Q0 = diag(10.^(lo + span*rand(rs,12,1)));
+    R0 = diag(10.^(lo + span*rand(rs,4,1)));
+else
+    [Q0, R0] = d1_bryson_weights(cfg.plant);
+end
 end
 
 function scen = sample_scenarios(cfg)

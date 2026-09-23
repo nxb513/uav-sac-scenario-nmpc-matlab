@@ -82,6 +82,11 @@ on:
         required: false
         default: "0.7"
         type: string
+      random_qr:
+        description: "1 = teacher Q,R base is RANDOM per seed (no Bryson warm-start); 0 = Bryson"
+        required: false
+        default: "0"
+        type: string
 
 jobs:
   joint:
@@ -106,6 +111,7 @@ jobs:
       D1_PLANT_PERTURB: ${{ inputs.plant_perturb }}
       D1_C_LOW: ${{ inputs.c_low }}
       D1_C_HIGH: ${{ inputs.c_high }}
+      D1_RANDOM_QR: ${{ inputs.random_qr }}
       D1_SOLVER: ${{ inputs.solver }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:
