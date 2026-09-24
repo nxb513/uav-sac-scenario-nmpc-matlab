@@ -88,8 +88,21 @@ else
 end
 
 % ---- open-ended SAC loop ----------------------------------------------------
-tStart = tic; lastCkpt = tic;
+tStart = tic; lastCkpt = tic; iterDur = [];
+wallReserve = 120;                                   % s kept for final save + consolidate
 while toc(tStart) < cfg.wallSeconds
+    % Do not START an iteration predicted to overrun the wall budget: SQP iters
+    % take 8-17 min, and an overrun hits the CI step timeout (340') and kills the
+    % job before the final checkpoint/consolidate. Estimate = max of last 5 iters.
+    if ~isempty(iterDur)
+        est = max(iterDur(max(1,end-4):end));
+        if toc(tStart) + est + wallReserve > cfg.wallSeconds
+            fprintf('WALL_STOP elapsed=%.0fs next-iter est=%.0fs (wall=%ds)\n', ...
+                toc(tStart), est, cfg.wallSeconds);
+            break;
+        end
+    end
+    tIter = tic;
     st.iter = st.iter + 1;
     st.teacherVersion = st.iter;                       % Q,R identity per rollout
     a = sac_sample_action(sac, cfg);                   % candidate in [-1,1]^6
@@ -114,6 +127,7 @@ while toc(tStart) < cfg.wallSeconds
     if toc(lastCkpt) > cfg.checkpointEverySec
         save_checkpoint(ckptPath, sac, sur, st, cfg); lastCkpt = tic;
     end
+    iterDur(end+1) = toc(tIter); %#ok<AGROW>
 end
 save_checkpoint(ckptPath, sac, sur, st, cfg);        % main checkpoint FIRST (safe)
 fprintf('D1_JOINT_DONE iters=%d samples=%d final_reward=%.4f\n', ...
