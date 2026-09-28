@@ -1,0 +1,189 @@
+name: D1 final evaluation (real wind, train / OOD)
+
+# LQR, LQI, linear MPC (chain-independent, job "baseline") and, per SAC chain, the
+# SAC-NMPC teacher (acados), the proposed blend and proposed + I (LQI base), all flown
+# on the same flights: real wind (Neural-Fly force + SWUF-3D field wind) x train / OOD
+# plants x 5 trajectory families. Every controller knows only the nominal model.
+# Wind data are downloaded from their sources inside each job, never uploaded.
+
+on:
+  workflow_dispatch:
+    inputs:
+      chains:
+        description: 'JSON list of chains: [{"seed":..,"rqr":0|1,"dec":..,"run":"<run id holding the checkpoint>"}]'
+        required: true
+        default: '[{"seed":260914201,"rqr":0,"dec":0.5,"run":"36382794014"},{"seed":260914001,"rqr":0,"dec":1.5,"run":"36382800901"},{"seed":260914301,"rqr":0,"dec":3,"run":"36382814947"},{"seed":260914101,"rqr":1,"dec":1.5,"run":"36382808189"},{"seed":260914102,"rqr":1,"dec":1.5,"run":"36382808189"},{"seed":260914103,"rqr":1,"dec":1.5,"run":"36382808189"},{"seed":260914104,"rqr":1,"dec":1.5,"run":"36382808189"},{"seed":260914105,"rqr":1,"dec":1.5,"run":"36382808189"}]'
+        type: string
+      conds:
+        description: 'JSON array of conditions (train | ood)'
+        required: true
+        default: '["train","ood"]'
+        type: string
+      chain_ctrls:
+        description: "Per-chain controllers: Teacher,P,PI"
+        required: true
+        default: "Teacher,P,PI"
+        type: string
+      base_ctrls:
+        description: "Chain-independent controllers: LQR,LQI,MPC (empty = skip baseline job)"
+        required: false
+        default: "LQR,LQI,MPC"
+        type: string
+      solver:
+        description: "Teacher NMPC solver (training used SQP)"
+        required: true
+        default: "SQP"
+        type: string
+
+jobs:
+  baseline:
+    if: ${{ inputs.base_ctrls != '' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        cond: ${{ fromJSON(inputs.conds) }}
+    env:
+      D1_SEED: "260914201"
+      D1_COND: ${{ matrix.cond }}
+      D1_CTRLS: ${{ inputs.base_ctrls }}
+      D1_TAG: base
+      D1_WIND_DIR: ${{ github.workspace }}/wind/series
+      D1_OUT: ${{ github.workspace }}/results/final_eval
+    steps:
+      - uses: actions/checkout@v6
+      - name: Fetch real-wind data and build force series (not redistributed)
+        run: bash tools/wind/fetch_wind.sh
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: >-
+            Deep_Learning_Toolbox
+            Control_System_Toolbox
+            Model_Predictive_Control_Toolbox
+            Statistics_and_Machine_Learning_Toolbox
+          cache: true
+      - name: Run baseline controllers (${{ matrix.cond }})
+        timeout-minutes: 110
+        uses: matlab-actions/run-command@v3
+        with:
+          command: addpath(genpath('src')); addpath('configs'); addpath('experiments'); d1_final_eval;
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-final-eval-${{ matrix.cond }}-base-${{ github.run_id }}
+          path: results/final_eval/
+          if-no-files-found: warn
+          retention-days: 30
+
+  chain:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        chain: ${{ fromJSON(inputs.chains) }}
+        cond: ${{ fromJSON(inputs.conds) }}
+    env:
+      D1_SEED: ${{ matrix.chain.seed }}
+      D1_RANDOM_QR: ${{ matrix.chain.rqr }}
+      D1_LOGMULT_DEC: ${{ matrix.chain.dec }}
+      D1_SOLVER: ${{ inputs.solver }}
+      D1_COND: ${{ matrix.cond }}
+      D1_CTRLS: ${{ inputs.chain_ctrls }}
+      D1_TAG: c${{ matrix.chain.seed }}
+      D1_CKPT: ${{ github.workspace }}/ckpt/checkpoint_seed${{ matrix.chain.seed }}.mat
+      D1_CONF: ${{ github.workspace }}/ckpt/conf_seed${{ matrix.chain.seed }}.mat
+      D1_WIND_DIR: ${{ github.workspace }}/wind/series
+      D1_OUT: ${{ github.workspace }}/results/final_eval
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download chain checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: d1-joint-ckpt-seed${{ matrix.chain.seed }}-${{ matrix.chain.run }}
+          path: ckpt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ matrix.chain.run }}
+      - name: Fetch real-wind data and build force series (not redistributed)
+        run: bash tools/wind/fetch_wind.sh
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential git unzip wget
+      - name: Clone and build acados
+        run: |
+          set -euxo pipefail
+          git clone https://github.com/acados/acados.git "$GITHUB_WORKSPACE/acados"
+          cd "$GITHUB_WORKSPACE/acados"
+          git submodule update --recursive --init
+          mkdir -p build && cd build
+          cmake -DACADOS_WITH_QPOASES=ON -DACADOS_INSTALL_DIR="$GITHUB_WORKSPACE/acados" ..
+          make install -j4
+          echo "ACADOS_INSTALL_DIR=$GITHUB_WORKSPACE/acados" >> "$GITHUB_ENV"
+          echo "ACADOS_SOURCE_DIR=$GITHUB_WORKSPACE/acados" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/acados/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+      - name: Download CasADi (MATLAB, linux64)
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/acados/external/casadi-matlab"
+          cd "$GITHUB_WORKSPACE/acados/external/casadi-matlab"
+          wget -q https://github.com/casadi/casadi/releases/download/3.6.7/casadi-3.6.7-linux64-matlab2018b.zip -O casadi.zip
+          unzip -q casadi.zip && rm -f casadi.zip
+          echo "CASADI_DIR=$GITHUB_WORKSPACE/acados/external/casadi-matlab" >> "$GITHUB_ENV"
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: >-
+            Deep_Learning_Toolbox
+            Optimization_Toolbox
+            Control_System_Toolbox
+            Statistics_and_Machine_Learning_Toolbox
+          cache: true
+      - name: Run chain controllers (seed ${{ matrix.chain.seed }}, ${{ matrix.cond }})
+        timeout-minutes: 330
+        uses: matlab-actions/run-command@v3
+        with:
+          command: >-
+            setenv('ENV_RUN','true');
+            setenv('ACADOS_INSTALL_DIR',getenv('ACADOS_INSTALL_DIR'));
+            addpath(getenv('CASADI_DIR'));
+            addpath(fullfile(getenv('ACADOS_INSTALL_DIR'),'interfaces','acados_matlab_octave'));
+            addpath(genpath('src')); addpath('configs'); addpath('experiments');
+            d1_final_eval;
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-final-eval-${{ matrix.cond }}-c${{ matrix.chain.seed }}-${{ github.run_id }}
+          path: results/final_eval/
+          if-no-files-found: warn
+          retention-days: 30
+
+  summary:
+    needs: [baseline, chain]
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download all result files
+        uses: actions/download-artifact@v4
+        with:
+          pattern: d1-final-eval-*-${{ github.run_id }}
+          path: results
+          merge-multiple: true
+      - name: Summarize
+        run: |
+          python3 -m pip install --quiet pandas
+          python3 tools/eval/summarize_final_eval.py results | tee summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-final-eval-summary-${{ github.run_id }}
+          path: summary.md
+          retention-days: 30
