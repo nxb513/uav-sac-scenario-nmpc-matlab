@@ -92,6 +92,11 @@ on:
         required: false
         default: "1.5"
         type: string
+      stop_iter:
+        description: "Stop exactly at this SAC iteration, then checkpoint + consolidate (0 = off)"
+        required: false
+        default: "0"
+        type: string
 
 jobs:
   joint:
@@ -118,6 +123,7 @@ jobs:
       D1_C_HIGH: ${{ inputs.c_high }}
       D1_RANDOM_QR: ${{ inputs.random_qr }}
       D1_LOGMULT_DEC: ${{ inputs.logmult_dec }}
+      D1_STOP_ITER: ${{ inputs.stop_iter }}
       D1_SOLVER: ${{ inputs.solver }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:

@@ -91,6 +91,12 @@ end
 tStart = tic; lastCkpt = tic; iterDur = [];
 wallReserve = 120;                                   % s kept for final save + consolidate
 while toc(tStart) < cfg.wallSeconds
+    % Optional hard stop at an exact SAC iteration (D1_STOP_ITER), so every chain
+    % can be frozen at the same iteration count; 0 = no stop.
+    if cfg.stopIter > 0 && st.iter >= cfg.stopIter
+        fprintf('STOP_ITER reached iter=%d (target %d)\n', st.iter, cfg.stopIter);
+        break;
+    end
     % Do not START an iteration predicted to overrun the wall budget: SQP iters
     % take 8-17 min, and an overrun hits the CI step timeout (340') and kills the
     % job before the final checkpoint/consolidate. Estimate = max of last 5 iters.
@@ -147,6 +153,7 @@ cfg.seed = getenv_num('D1_SEED', 260914001);
 cfg.runDir = getenv_str('D1_RUN_DIR', fullfile('results','d1_joint', ...
     sprintf('seed%d', getenv_num('D1_SEED',260914001))));
 cfg.wallSeconds = getenv_num('D1_WALL_SECONDS', 300);
+cfg.stopIter = getenv_num('D1_STOP_ITER', 0);        % stop exactly at this SAC iter (0 = off)
 cfg.resume = strcmp(getenv_str('D1_RESUME','0'),'1');
 cfg.Ts = 0.05; cfg.N = 20; cfg.Nc = 5; cfg.H = 20; cfg.Qf = 0; cfg.dU = 0;
 cfg.M = 5;                                          % robust scenarios (frozen)
