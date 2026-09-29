@@ -97,6 +97,16 @@ on:
         required: false
         default: "0"
         type: string
+      wind:
+        description: "1 = random training wind (1-10 m/s mean + Dryden gusts, rotor-drag force); 0 = no wind"
+        required: false
+        default: "1"
+        type: string
+      ckpt_every:
+        description: "Save a frozen milestone checkpoint (+ confidences) every N SAC iterations (0 = off)"
+        required: false
+        default: "50"
+        type: string
 
 jobs:
   joint:
@@ -124,6 +134,8 @@ jobs:
       D1_RANDOM_QR: ${{ inputs.random_qr }}
       D1_LOGMULT_DEC: ${{ inputs.logmult_dec }}
       D1_STOP_ITER: ${{ inputs.stop_iter }}
+      D1_WIND: ${{ inputs.wind }}
+      D1_CKPT_EVERY_ITER: ${{ inputs.ckpt_every }}
       D1_SOLVER: ${{ inputs.solver }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
     steps:

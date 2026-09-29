@@ -9,7 +9,7 @@ function d1_final_eval()
 %            terminal DARE P, input box constraints, KWIK active-set QP (warm start)
 %   Teacher  SAC-NMPC teacher of the chain: scenario NMPC (acados, M=5 scenarios from
 %            the chain seed, N=20, Nc=5, D1_SOLVER) with Q,R = action_to_QR(tanh(mu))
-%            -- identical to the pipeline COMPARE branch (b)
+%            -- same teacher_step as training (solver reset per flight and after a failed solve)
 %   P        proposed blend u = sat(uh - K e + alpha*Du)         (pipeline fly_gate (d))
 %   PI       proposed + I on the LQI base u = sat(uh - Kx e - KI z + alpha*Du)
 % Integral states use clamping anti-windup (no integration on saturated steps).
@@ -166,14 +166,14 @@ end
 % ---- closed-loop flight ---------------------------------------------------------
 function [X, U, tm, aux, conv] = fly_one(kind, f, cfg, lqr, sur, conf, KI, KxLQI, mp, teacher)
 % Real time (k-1)*Ts is passed to the plant so the time-varying wind acts.
-Ts = cfg.Ts; N = cfg.N; M = cfg.M; Xref = f.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
+Ts = cfg.Ts; N = cfg.N; Xref = f.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
 uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
 lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
 X = nan(12,T); U = nan(4,T); tm = nan(1,T); aux = nan(1,T); conv = nan(1,T);
 haveConf = ~isempty(conf) && isfield(conf,'LQR') && ~isempty(conf.LQR.w);
 x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4); zI = zeros(3,1);
 uprev = uh; if kind == 'M', ws.iA = false(size(mp.bin)); end
-if kind == 'T', warmstart_ref(teacher, Xref, 1, uh, cfg); end
+if kind == 'T', teacher_reset(teacher, Xref, 1, uh, cfg); end     % clean solver per flight
 for k = 1:T
     t0 = tic;
     e = x - Xref(:,k);
@@ -184,12 +184,8 @@ for k = 1:T
             uu = uh - KxLQI*e - KI*zI; u = min(max(uu, lo), hi);
         case 'M'
             [u, ws, nit] = lmpc_solve(mp, x, Xref(:, k+1:k+mp.N), ws); aux(k) = nit;
-        case 'T'   % pipeline COMPARE branch (b): apply the NMPC iterate, hold on failure
-            for s = 0:N-1, teacher.set('cost_y_ref', [repmat(Xref(:,k+s),M,1); uh], s); end
-            teacher.set('cost_y_ref_e', repmat(Xref(:,k+N),M,1));
-            teacher.set('constr_x0', [repmat(x,M,1); uprev]);
-            teacher.solve(); conv(k) = (teacher.get('status')==0); du0 = teacher.get('u',0);
-            if all(isfinite(du0)), u = uprev + du0; else, u = uprev; end
+        case 'T'   % identical to training: teacher_step (reset after a failed solve)
+            [u, status] = teacher_step(teacher, x, uprev, Xref, k, uh, cfg); conv(k) = (status == 0);
             u = min(max(u,lo),hi); uprev = u;
         case {'P', 'J'}
             if kind == 'J'
@@ -200,6 +196,7 @@ for k = 1:T
             feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
             if all(isfinite(feat))
                 du = surrogate_predict_du(sur, feat); cS = surrogate_predict_cs(sur, feat);
+                if ~all(isfinite([du; cS])), du = zeros(4,1); cS = 0; end   % NaN guard -> pure base
             else
                 du = zeros(4,1); cS = 0;
             end
@@ -321,6 +318,13 @@ cfg.sacLR = 3e-4; cfg.sacBatch = 256; cfg.sacBufferCap = 5e4;
 cfg.sacGamma = 0.0;                                  % 1-step bandit (done each ep)
 cfg.sacTau = 0.005; cfg.sacTargetEntropy = -cfg.actionDim;
 cfg.logEvery = 1; cfg.checkpointEverySec = 120;
+% frozen milestone checkpoints (+ their own confidences) every N SAC iterations; 0 = off
+cfg.ckptEvery = getenv_num('D1_CKPT_EVERY_ITER', 50);
+% training wind (random, synthetic; NO measured wind data is used): see sample_wind
+cfg.windOn   = strcmp(getenv_str('D1_WIND','1'),'1');
+cfg.windMin  = getenv_num('D1_WIND_MIN', 1);         % mean wind speed range [m/s]
+cfg.windMax  = getenv_num('D1_WIND_MAX', 10);
+cfg.windDrag = [0.425; 0.256; 0];                    % mass-normalized rotor drag [1/s], Faessler et al. RA-L 2018
 end
 
 function v = getenv_num(name, dflt)
@@ -447,6 +451,36 @@ for j = 0:N
 end
 for j = 0:N-1
     teacher.set('init_u', zeros(4,1), j);
+end
+end
+
+function teacher_reset(teacher, Xref, k, uh, cfg)
+% Clear ALL solver memory (iterates, multipliers, QP warm start) and re-seed the
+% initial guess along the reference. The acados solver object is reused for the whole
+% process; without this, one failed solve left corrupted multipliers that made every
+% later solve fail (the former reward -10 "collapse" that only a restart cured).
+teacher.reset();
+warmstart_ref(teacher, Xref, k, uh, cfg);
+end
+
+function [u, status, usable] = teacher_step(teacher, x, uprev, Xref, k, uh, cfg)
+% One teacher NMPC step. The SQP iterate is applied when the solver converged
+% (status 0) or hit its iteration cap (status 2) with a finite iterate; otherwise the
+% last control is held and the solver is reset before the next step.
+N = cfg.N; M = cfg.M;
+for s = 0:N-1
+    teacher.set('cost_y_ref', [repmat(Xref(:,k+s),M,1); uh], s);
+end
+teacher.set('cost_y_ref_e', repmat(Xref(:,k+N),M,1));
+teacher.set('constr_x0', [repmat(x,M,1); uprev]);
+teacher.solve();
+status = teacher.get('status'); du0 = teacher.get('u', 0);
+usable = any(status == [0 2]) && all(isfinite(du0));
+if usable
+    u = uprev + du0;
+else
+    u = uprev;
+    teacher_reset(teacher, Xref, min(k+1, size(Xref,2)-N), uh, cfg);
 end
 end
 
