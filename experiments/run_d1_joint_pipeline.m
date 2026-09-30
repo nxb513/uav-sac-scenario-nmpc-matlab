@@ -428,7 +428,8 @@ uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
 xN = Xref(:,1); xL = Xref(:,1); uprev = uh;
 stateHist = repmat(xN,1,4); inputHist = repmat(uh,1,4);
 posErrN = zeros(T,1); duAcc = 0; okN = 0; cViol = 0; prevU = uh;
-diverged = false; kdone = T; tCase = tic; nSt = [0 0 0];     % teacher status counts: conv / max-iter / failed
+tCase = tic; nSt = [0 0 0];                          % teacher status counts: conv / max-iter / failed
+nDivN = 0; nDivL = 0;                                % divergence restarts (teacher copy / LQR copy)
 EL = zeros(12, T+1); EL(:,1) = xL - Xref(:,1);       % LQR error traj for c_L
 usat_lo = [0;-0.5;-0.5;-0.25]; usat_hi = [cfg.plant.Tmax;0.5;0.5;0.25];
 teacher_reset(teacher, Xref, 1, uh, cfg);            % clean solver memory for EVERY case
@@ -462,10 +463,17 @@ for k = 1:T
     inputHist = [inputHist(:,2:end), uN];
     duAcc = duAcc + sum((uN-prevU).^2); prevU = uN; xN = xNnext;
     if ~all(isfinite(xN)) || norm(xN(1:3)) > 1e4
-        diverged = true; kdone = k; break;           % diverged -> penalize case
+        % diverged: charge this step the capped error + an attitude violation, then
+        % restart this plant copy ON the reference (histories, actuator state and solver
+        % reset) so the case always runs its full length
+        nDivN = nDivN + 1; posErrN(k) = 5; cViol = cViol + 1;
+        xN = Xref(:,k+1); uprev = uh; prevU = uh;
+        stateHist = repmat(xN,1,4); inputHist = repmat(uh,1,4);
+        teacher_reset(teacher, Xref, k+1, uh, cfg);
+    else
+        posErrN(k) = norm(xN(1:3) - Xref(1:3,k+1));
+        cViol = cViol + any(abs(xN(4:5)) > 1.35);
     end
-    posErrN(k) = norm(xN(1:3) - Xref(1:3,k+1));
-    cViol = cViol + any(abs(xN(4:5)) > 1.35);
     % ---- LQR paired branch (own plant copy) --------------------------------
     uL = uh - lqr.K*(xL - Xref(:,k));
     uL = min(max(uL,[0;-0.5;-0.5;-0.25]),[cfg.plant.Tmax;0.5;0.5;0.25]);
@@ -474,12 +482,17 @@ for k = 1:T
     catch
         xL = nan(12,1);
     end
-    EL(:,k+1) = xL - Xref(:,k+1);
+    if ~all(isfinite(xL)) || norm(xL(1:3)) > 1e4
+        nDivL = nDivL + 1; EL(:,k+1) = NaN;          % NaN breaks every contraction window across it
+        xL = Xref(:,k+1);                            % restart the LQR copy on the reference
+    else
+        EL(:,k+1) = xL - Xref(:,k+1);
+    end
 end
-% reward from NMPC KPIs (negative cost; lower error/failure = higher reward).
-% posErr capped at 5 m/step so a rare hard case cannot swamp the mean; LQR
-% fallback keeps the plant bounded, so no separate divergence term.
-nOk = max(kdone,1);
+% reward from NMPC KPIs over the FULL case (negative cost; lower error/failure =
+% higher reward). posErr capped at 5 m/step; a divergence step is charged the cap and
+% the copy restarts on the reference, so there is no separate divergence term.
+nOk = T; kdone = T;
 pe = min(posErrN(1:nOk), 5);
 posRmse = sqrt(mean(pe.^2));
 failRate = 1 - okN/nOk;
@@ -492,8 +505,8 @@ catch
     cLdata = [];
 end
 if isempty(cLdata), cLdata = zeros(0,1); end
-fprintf('  CASE %-26s steps=%4d conv=%.2f maxit=%.2f fail=%.2f diverged=%d t=%.0fs\n', ...
-    kase.groupId, kdone, nSt/max(kdone,1), diverged, toc(tCase));
+fprintf('  CASE %-26s steps=%4d conv=%.2f maxit=%.2f fail=%.2f restarts NMPC=%d LQR=%d t=%.0fs\n', ...
+    kase.groupId, kdone, nSt/max(kdone,1), nDivN, nDivL, toc(tCase));
 end
 
 % ---- surrogate (2-head: residual Delta_u + confidence c_S) ------------------
@@ -1121,10 +1134,16 @@ for ci = 1:numel(sel)
         try
             x = quad_step_rk4((k-1)*Ts, x, u, Ts, theta, ds);
         catch                                        % singular attitude = divergence
-            break;
+            x = nan(12,1);
         end
-        if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
-        perr(k) = norm(x(1:3) - Xref(1:3,k+1)); nok = k;
+        nok = k;
+        if ~all(isfinite(x)) || norm(x(1:3)) > 1e4
+            % diverged: restart on the reference and keep flying to the end of the case
+            % (error unknown at this step -> NaN, excluded from the RMS windows)
+            x = Xref(:,k+1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
+            continue;
+        end
+        perr(k) = norm(x(1:3) - Xref(1:3,k+1));
     end
     for k = H:nok
         wv = perr(k-H+1:k); wv = wv(isfinite(wv));
@@ -1215,12 +1234,16 @@ if cfg.windOn, ds = sample_wind(cfg, T); else, ds = []; end   % same wind law as
 for k = 1:T
     u = uh - lqr.K*(x - Xref(:,k)); u = min(max(u,lo),hi);
     try
-        x = quad_step_rk4((k-1)*Ts, x, u, Ts, theta, ds); X(:,k) = x;
+        x = quad_step_rk4((k-1)*Ts, x, u, Ts, theta, ds);
     catch                                            % singular attitude = divergence
-        break;
+        x = nan(12,1);
     end
-    if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
+    if ~all(isfinite(x)) || norm(x(1:3)) > 1e4
+        X(:,k) = NaN;                                % NaN breaks every contraction window across it
+        x = Xref(:,k+1);                             % restart on the reference, run the full case
+    else
+        X(:,k) = x;
+    end
 end
-Tv = find(all(isfinite(X),1), 1, 'last'); if isempty(Tv), Tv = 1; end
-E = X(:,1:Tv) - Xref(:,2:Tv+1);             % align state_k with ref_{k+1}
+E = X - Xref(:,2:T+1);                       % align state_k with ref_{k+1}
 end
