@@ -106,9 +106,12 @@ Mục 9) nên học một ánh xạ $z\to\Delta u$ trên nhãn của mọi $Q,R$
 buffer vòng $10^5$ mẫu ($\approx5$ iter gần nhất), mỗi minibatch lấy $50\%$ từ nhãn của 3 iter gần nhất.
 Những vùng surrogate bám kém sẽ được $\cS$ tự hạ thấp. Khối B chạy tự động sau vòng SAC ở cuối mỗi run
 (hoặc riêng bằng \texttt{D1\_CONSOLIDATE=1}), và tại mỗi \emph{mốc checkpoint} (mặc định mỗi $50$ iter,
-trên một bản sao của surrogate, Mục 8): huấn luyện đầu $\cS$ và bộ phân loại $\cL$; tách khỏi Khối A để
-tránh vòng phụ thuộc $\alpha\leftrightarrow\cS$. Mọi lượt bay dùng để huấn luyện (cả hai khối) đều có
-\textbf{gió ngẫu nhiên} (Mục 4).
+Mục 8): huấn luyện đầu $\cS$ (trên một \emph{bản sao} của surrogate) và bộ phân loại $\cL$; tách khỏi Khối A
+để tránh vòng phụ thuộc $\alpha\leftrightarrow\cS$. Khối B \textbf{không bao giờ sửa checkpoint huấn luyện}:
+kết quả (\texttt{conf} và surrogate đã hiệu chỉnh đầu $\cS$) được ghi \emph{cùng nhau} vào file
+\texttt{conf\_seed<s>[\_iter<NNNN>].mat}; cặp này là bộ điều khiển triển khai. Nhờ vậy mọi lần chạy Khối B đều
+xuất phát từ cùng trạng thái của surrogate huấn luyện, không phụ thuộc cách chuỗi được chia thành các job. Mọi
+lượt bay dùng để huấn luyện (cả hai khối) đều có \textbf{gió ngẫu nhiên} (Mục 4).
 \begin{center}\small
 \begin{tabular}{@{}p{3.4cm} p{4.2cm} p{6.6cm}@{}}
 \toprule
@@ -217,8 +220,24 @@ Hệ số mô-men $\alpha_\tau$ & $\pm15\%$ & $\pm30\%$\\
 \texttt{step1\_\allowbreak plant\_\allowbreak config.\allowbreak disturbance.\allowbreak training} và các mức nhiễu train/ood của
 \texttt{step3\_disturbance\_config} được định nghĩa trong repo nhưng pipeline D1 không dùng; gió huấn luyện
 chỉ đến từ mô hình ở trên. Các chế độ chẩn đoán trong pipeline (\texttt{D1\_DIAG}, \texttt{D1\_\allowbreak SURR\_\allowbreak EVAL},
-\texttt{D1\_\allowbreak COMPARE}, \texttt{D1\_\allowbreak GATE\_\allowbreak GRID}) bay \textbf{không có gió}. Dữ liệu gió đo thực chỉ dùng để
-kiểm chứng trong script đánh giá riêng (Mục 13), không bao giờ dùng khi huấn luyện.
+\texttt{D1\_\allowbreak COMPARE}, \texttt{D1\_\allowbreak GATE\_\allowbreak GRID}) bay trong \textbf{cùng môi trường gió huấn
+luyện} (một mẫu gió cho mỗi quỹ đạo, dùng chung cho mọi bộ điều khiển của quỹ đạo đó). Dữ liệu gió đo thực chỉ
+dùng để kiểm chứng trong script đánh giá cuối (Mục 13), không bao giờ dùng khi huấn luyện.
+
+\subsection{Quy tắc bay chung (mọi lượt bay trong mã)}
+Huấn luyện, Khối B, các chế độ chẩn đoán và đánh giá cuối đều dùng \emph{cùng} các quy tắc sau (hàm
+\texttt{plant\_step}, \texttt{track\_err}, \texttt{teacher\_step}, \texttt{blend\_control}):
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item \textbf{Bước plant:} RK4 với thời gian thực $t=(k-1)T_s$. \textbf{Phân kỳ} khi tích phân báo lỗi
+(ví dụ tốc độ góc Euler ZYX suy biến khi $\theta=\pm90^\circ$), trạng thái không hữu hạn, hoặc
+$\norm{p}>10^4$ m.
+\item \textbf{Luôn bay đủ quỹ đạo:} khi phân kỳ, lượt bay \textbf{không} dừng; plant được đặt lại đúng trên
+tham chiếu ở bước kế tiếp, trạng thái trong của bộ điều khiển được đặt lại (lịch sử của surrogate,
+$u_{\mathrm{prev}}$, tích phân $z$, solver/tập ràng buộc hoạt động), số lần đặt lại được đếm, và bay tiếp
+đến hết.
+\item \textbf{Sai số bám:} $e_k=\norm{p_k-p_{\mathrm{ref},k+1}}$ (trạng thái sau bước $k$ so với tham chiếu
+$k{+}1$), \textbf{chặn ở $5$ m}; bước phân kỳ tính bằng $5$ m. RMSE lấy trên đủ số bước.
+\end{itemize}
 
 % ===================== 4 =====================
 \section{Tập quỹ đạo tham chiếu và cấu trúc episode}
@@ -244,8 +263,9 @@ Gia tốc mục tiêu (3 mức) & $2.0$ (mild), $5.0$ (moderate), $9.0$ (hard) (
 \subsection{Episode và điều kiện công bằng LQR vs teacher}
 \textbf{Ngân hàng huấn luyện:} $120$ quỹ đạo $=5$ họ $\times$ $3$ mức gia tốc $\times$ $8$ mốc tốc độ, sinh
 tất định (mỗi quỹ đạo một seed riêng theo tên). \textbf{1 lần chấm SAC (1 iter) $=$ bay $20$ quỹ đạo rút
-ngẫu nhiên có hoàn lại} từ ngân hàng này, mỗi quỹ đạo $979$ bước, trên \textbf{plant danh nghĩa với một
-mẫu gió ngẫu nhiên riêng cho mỗi quỹ đạo} (Mục 4); reward của iter là trung bình trên $20$ quỹ đạo (Mục 8).
+ngẫu nhiên có hoàn lại} từ ngân hàng này, mỗi quỹ đạo \textbf{luôn đủ $979$ bước} (kể cả khi phân kỳ, Mục
+4.1), trên \textbf{plant danh nghĩa với một mẫu gió ngẫu nhiên riêng cho mỗi quỹ đạo} (Mục 4); reward của
+iter là trung bình trên $20$ quỹ đạo (Mục 8).
 \textbf{LQR chạy song song trên bản sao riêng của cùng plant, cùng quỹ đạo, cùng trạng thái đầu và cùng mẫu
 gió} với teacher, nhưng \textbf{độc lập} (không hedge kịch bản như teacher) và \textbf{thiết kế trên mô hình
 danh nghĩa}.
@@ -345,7 +365,8 @@ hoặc $\delta u_0$ không hữu hạn: giữ $u_{\mathrm{prev}}$ và \textbf{đ
 \textbf{Không} có dự phòng LQR.
 \item \textbf{Đặt lại solver} (\texttt{teacher\_reset}): gọi \texttt{reset()} của acados (xoá nghiệm lặp,
 multiplier, bộ nhớ warm start của QP) rồi đặt nghiệm khởi tạo $x$ dọc tham chiếu, $\delta u=0$. Thực hiện ở
-\textbf{đầu mỗi quỹ đạo} và \textbf{sau mỗi lần giải không dùng được}. Lý do: cùng một đối tượng solver được
+\textbf{đầu mỗi quỹ đạo}, \textbf{sau mỗi lần giải không dùng được} và \textbf{sau mỗi lần plant được đặt
+lại do phân kỳ} (Mục 4.1). Lý do: cùng một đối tượng solver được
 dùng suốt tiến trình; nếu không đặt lại, multiplier hỏng từ một lần giải thất bại làm mọi lần giải sau đều
 thất bại cho tới khi khởi động lại tiến trình. Cùng quy tắc bước này được dùng khi huấn luyện, trong các chế
 độ chẩn đoán/so sánh và trong script đánh giá cuối.
@@ -382,15 +403,22 @@ trong đó sai số vị trí mỗi bước bị chặn ở $5$ m; $\mathrm{RMS}
 căn trung bình bình phương độ thay đổi lệnh giữa hai bước; $r_{\mathrm{viol}}$ là tỉ lệ bước có $|\phi|$
 hoặc $|\theta|>1.35$ rad; $r_{\mathrm{fail}}$ là tỉ lệ bước SQP không hội tụ (status $\neq0$, kể cả chạm
 giới hạn vòng lặp; lời giải chạm giới hạn vòng lặp vẫn được áp dụng, Mục 7). Reward \emph{không} có thành
-phần vận tốc; nếu quỹ đạo phân kỳ, trung bình chỉ tính trên các bước trước lúc phân kỳ. Reward được tính trên
-plant có gió (Mục 4).
+phần vận tốc. Theo quy tắc bay chung (Mục 4.1), quỹ đạo luôn bay đủ $979$ bước; bước phân kỳ tính sai số
+$5$ m và một lần vi phạm tư thế, rồi bản sao plant đó (teacher hoặc LQR) được đặt lại trên tham chiếu; mọi
+trung bình lấy trên đủ số bước. Reward được tính trên plant có gió (Mục 4).
 \item \textbf{Checkpoint đầy đủ} (actor/critic/$\alpha_{\mathrm{ent}}$/trạng thái Adam/buffer SAC $+$
-surrogate (mạng, Adam, buffer) $+$ bộ đếm, $Q,R$ cuối $+$ RNG) để \textbf{resume}; ghi đè cùng một file mỗi
-$\ge120$ s (thực tế sau mỗi iter). Vòng lặp không bắt đầu iter mới nếu dự báo vượt ngân sách thời gian.
+surrogate (mạng, Adam, buffer) $+$ bộ đếm, $Q,R$ cuối $+$ \textbf{iter đang làm dở} (hành động $a$, chỉ số
+các quỹ đạo, reward đã có, quỹ đạo kế tiếp) $+$ RNG) để \textbf{resume đến mức từng quỹ đạo}: một iter dài hơn
+một job CI được làm tiếp ở job sau với cùng chuỗi ngẫu nhiên. Ghi đè cùng một file sau mỗi iter và mỗi
+$\ge120$ s giữa các quỹ đạo. Vòng lặp không bắt đầu một quỹ đạo mới nếu dự báo (lớn nhất của 5 quỹ đạo gần
+nhất) vượt ngân sách thời gian. Mỗi quỹ đạo in một dòng tiến độ (tỉ lệ status hội tụ / chạm giới hạn vòng
+lặp / không dùng được, số lần đặt lại do phân kỳ, thời gian).
 \item \textbf{Checkpoint mốc} (\texttt{D1\_CKPT\_EVERY\_ITER}, mặc định $50$): khi số iter chia hết cho
-$50$, lưu một bản cố định \texttt{checkpoint\_seed<s>\_iter<NNNN>.mat} và chạy Khối B trên \emph{bản sao}
-surrogate để tạo tin cậy riêng \texttt{conf\_seed<s>\_iter<NNNN>.mat}; trạng thái bộ sinh ngẫu nhiên được
-khôi phục sau đó nên việc huấn luyện không bị ảnh hưởng. \textbf{Dừng đúng iter} (\texttt{D1\_STOP\_ITER}):
+$50$, lưu một bản cố định \texttt{checkpoint\_\allowbreak seed<s>\_\allowbreak iter<NNNN>.mat} và chạy Khối B trên
+\emph{bản sao} surrogate để tạo \texttt{conf\_\allowbreak seed<s>\_\allowbreak iter<NNNN>.mat} (tin cậy $+$ surrogate
+đã hiệu chỉnh đầu $\cS$ của mốc
+đó); trạng thái bộ sinh ngẫu nhiên được khôi phục sau đó nên việc huấn luyện không bị ảnh hưởng. Mốc là trạng
+thái tất định của chuỗi (không phụ thuộc lịch chia job). \textbf{Dừng đúng iter} (\texttt{D1\_STOP\_ITER}):
 khi đạt số iter chỉ định, vòng lặp dừng, lưu checkpoint và chạy Khối B như bình thường ($0$ = tắt).
 \item Tuỳ chọn ablation \texttt{D1\_RANDOM\_QR=1}: gốc $Q,R$ của teacher lấy ngẫu nhiên log-uniform
 $10^{[-2,2]}$ (cố định theo seed) thay cho Bryson; LQR vẫn dùng Bryson.
@@ -406,8 +434,8 @@ biệt}.}
 \item \textbf{Đầu vào $z_k$ (208 chiều)}: 4 trạng thái \emph{trước} bước hiện tại $x_{k-4..k-1}$
 ($12{\times}4$), 4 lệnh trước đó $u_{k-4..k-1}$ ($4{\times}4$), tham chiếu $x_{\mathrm{ref},k..k+10}$
 ($12{\times}11$), và 12 chiều dự phòng luôn bằng $0$. Lịch sử được cập nhật \emph{sau} khi tính $z_k$, nên
-$z_k$ không chứa $x_k$ (ở bước đầu, lịch sử được lấp bằng trạng thái đầu và $u_h$). Không có $Q,R$ trong
-đầu vào.
+$z_k$ không chứa $x_k$ (ở bước đầu, và sau mỗi lần plant được đặt lại do phân kỳ, lịch sử được lấp bằng
+trạng thái hiện tại và $u_h$). Không có $Q,R$ trong đầu vào.
 \item \textbf{Chuẩn hoá cố định} theo thang vật lý: vị trí $100$ m, góc $1.35$ / $\pi$ rad, vận tốc
 $25$ m/s, tốc độ góc $10$ rad/s, lệnh $[40,1,1,0.5]$.
 \item \textbf{Mạng hai đầu ra}: thân chung MLP $208$-$128$-$128$-$128$ (swish) rẽ hai nhánh: \emph{nhánh
@@ -423,7 +451,8 @@ Nếu mất mát hoặc bất kỳ gradient nào không hữu hạn thì \textbf
 \texttt{nSkipped}). Đây là ``chưng cất NMPC'' dạng phần dư; trạng thái teacher đi qua chịu gió huấn luyện.
 \item \textbf{Nhánh $\cS$ --- nhãn từ ROLLOUT SURROGATE (Khối B)}: mất mát MSE $(\cS(z_k)-s_k)^2$ với $s_k$
 định nghĩa ở Mục 10.2; \textbf{chỉ} cập nhật lớp cuối của đầu $\cS$, thân mạng và đầu $\Delta u$ đóng
-băng; bước có gradient không hữu hạn cũng bị bỏ qua.
+băng; bước có gradient không hữu hạn cũng bị bỏ qua. Việc này làm trên bản sao; đầu $\cS$ của surrogate
+huấn luyện giữ nguyên, bản đã hiệu chỉnh được lưu trong file \texttt{conf} (Mục 2).
 \end{itemize}
 Hai đầu \textbf{dùng chung thân mạng} nhưng \textbf{huấn luyện riêng}: ở hai khối khác nhau, với hai mất
 mát riêng (không có mất mát kết hợp); ký hiệu $\widehat{\Delta u}=\pi_\theta^{u}(z_k)$, $\cS=\pi_\theta^{c}(z_k)$.
@@ -450,7 +479,8 @@ với $z(e)$ chuẩn hoá của $\varphi(e)=[\,e\,(12);\ \norm{e_{\mathrm{pos}}}
 \norm{e_{\mathrm{vel}}},\norm{e_{\mathrm{rate}}}\,]\in\R^{16}$.
 
 Dữ liệu (Khối B): 60 quỹ đạo lấy đều từ ngân hàng, LQR (có bão hoà) bay trên plant danh nghĩa với một mẫu
-gió huấn luyện riêng cho mỗi quỹ đạo (Mục 4), 999 bước; nhãn ở mọi bước có đủ cửa sổ $H$ hữu hạn; góc của sai
+gió huấn luyện riêng cho mỗi quỹ đạo (Mục 4), luôn đủ 999 bước theo quy tắc bay chung (Mục 4.1; bước phân kỳ
+để NaN nên mọi cửa sổ vắt qua lần đặt lại bị loại); nhãn ở mọi bước có đủ cửa sổ $H$ hữu hạn; góc của sai
 số được quấn về $(-\pi,\pi]$. Huấn luyện: hồi quy logistic L2 ($\lambda=10^{-3}$) có trọng số cân bằng lớp,
 đặc trưng chuẩn hoá, 800 bước gradient (lr $0.5$). LQR cố định nhưng mẫu gió thay đổi theo bộ sinh ngẫu nhiên
 của run, nên dữ liệu và kết quả $\cL$ khác nhau giữa các lần chạy Khối B (độ chính xác được in ra ở dòng
@@ -481,9 +511,9 @@ tính cửa sổ 20 bước online}.
 \end{definition}
 
 Nhãn $s_k$ lấy từ \textbf{rollout surrogate-residual offline} (Khối B): 40 quỹ đạo lấy đều từ ngân hàng,
-$\alpha=1$, plant danh nghĩa với một mẫu gió huấn luyện riêng cho mỗi quỹ đạo, tối đa 989 bước (nếu đầu ra
-$\widehat{\Delta u}$ không hữu hạn thì dùng $0$); nhãn cho $k=H,\dots,$ bước hợp lệ cuối; $\varepsilon_p=0.5$
-m. Huấn luyện: MSE, 300 bước Adam (batch 256, lr $10^{-3}$), chỉ lớp cuối của đầu $\cS$. Diễn giải: $\cS$ cao
+$\alpha=1$, plant danh nghĩa với một mẫu gió huấn luyện riêng cho mỗi quỹ đạo, luôn đủ 989 bước theo quy tắc
+bay chung (nếu đầu ra $\widehat{\Delta u}$ không hữu hạn thì dùng $0$); sai số dùng cho $E^S_{20}$ là sai số đã
+chặn $5$ m của Mục 4.1 (bước phân kỳ tính $5$ m); nhãn cho $k=H,\dots,$ bước cuối; $\varepsilon_p=0.5$ m. Huấn luyện: MSE, 300 bước Adam (batch 256, lr $10^{-3}$), chỉ lớp cuối của đầu $\cS$. Diễn giải: $\cS$ cao
 $\Rightarrow$ gần đây surrogate bám tốt $\Rightarrow$ đáng tin, cho residual chạy; $\cS$ thấp $\Rightarrow$
 bám kém $\Rightarrow$ kém tin. Cả $\cS,\cL\in[0,1]$.
 
@@ -539,6 +569,8 @@ $c_{\mathrm{low}}=0.3$, $c_{\mathrm{high}}=0.7$ (\texttt{D1\_C\_LOW}, \texttt{D1
 
 \textbf{Chi tiết theo mã:}
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item Luật trộn được cài một lần trong hàm \texttt{blend\_control} và dùng nguyên văn ở mọi nơi (chế độ so sánh,
+chế độ cổng, đánh giá cuối); đầu vào là luật nền \emph{chưa} bão hoà ($u_h-Ke$ cho bộ đề xuất).
 \item $\uL=u_h-K(x_k-x_{\mathrm{ref},k})$ \emph{chưa} bão hoà khi cộng phần dư; bão hoà áp một lần cho tổng:
 $T\in[0,T_{\max}]$, $|\tau|\le[0.5,0.5,0.25]$.
 \item Cần xem trước tham chiếu 10 bước ($x_{\mathrm{ref},k..k+10}$) và lịch sử 4 bước để tạo $z_k$.
@@ -644,28 +676,35 @@ Systems} (2002).
 % ===================== 12 =====================
 \section{Chỉ số đánh giá}
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
-\item \textbf{Bám quỹ đạo}: RMSE và max sai số vị trí (căn lề bước $k$ so với $x_{\mathrm{ref},k+1}$).
+\item \textbf{Bám quỹ đạo}: RMSE và max của sai số vị trí đã chặn $5$ m (Mục 4.1; căn lề bước $k$ so với
+$x_{\mathrm{ref},k+1}$, bước phân kỳ tính $5$ m), kèm số lần đặt lại do phân kỳ.
 \item \textbf{Huấn luyện (Khối A)}: reward trung bình mỗi iter, số mẫu surrogate tích luỹ,
 $\alpha_{\mathrm{ent}}$.
 \item \textbf{Khối B}: $\cL$ --- độ chính xác phân loại, tỉ lệ nền co rút, số mẫu; $\cS$ --- số mẫu, trung
 bình nhãn $s_k$ và trung bình dự đoán (hồi quy, không phải phân loại).
 \item \textbf{So sánh} (\texttt{D1\_COMPARE=1}): mỗi họ 1 quỹ đạo lấy từ ngân hàng huấn luyện (mức giữa, hoặc
 khó nhất với \texttt{D1\_HARD=1}); 4 bộ điều khiển trên cùng plant: LQR, teacher SAC-NMPC (trọng số
-$a=\tanh(\mu)$), surrogate $\alpha=1$, blend. Chỉ số: RMSE và max sai số vị trí, $\alpha$ trung bình, tỉ lệ
-SQP hội tụ của teacher. Plant danh nghĩa hoặc \textbf{off-nominal}:
+$a=\tanh(\mu)$), surrogate $\alpha=1$, blend. Chỉ số: RMSE và max sai số vị trí, số lần đặt lại, $\alpha$
+trung bình, tỉ lệ SQP hội tụ của teacher. Plant danh nghĩa hoặc \textbf{off-nominal}:
 $\theta=\theta_{\mathrm{nom}}\odot(1+s\,\xi\odot\rho_{\mathrm{train}})$, $\xi\sim\mathcal{U}[-1,1]^{14}$
-theo seed, $s=$ \texttt{D1\_PLANT\_PERTURB}; không có gió hay nhiễu ngoại lực. Teacher dùng
-\texttt{teacher\_step}/\texttt{teacher\_reset} như khi huấn luyện.
-\item \textbf{Đánh giá surrogate} (\texttt{D1\_SURR\_EVAL=1}): surrogate $\alpha=1$ trên 6 quỹ đạo: sai số
-vị trí trung vị/lớn nhất, số bước bay được trước khi phân kỳ, $\cS$ trung bình.
+theo seed, $s=$ \texttt{D1\_PLANT\_PERTURB} (cùng plant cho cả 4 bộ); gió huấn luyện, một mẫu cho mỗi quỹ
+đạo.
+\item \textbf{Đánh giá surrogate} (\texttt{D1\_SURR\_EVAL=1}): surrogate $\alpha=1$ trên 6 quỹ đạo, gió huấn
+luyện: sai số vị trí trung vị/lớn nhất, số lần đặt lại, $\cS$ trung bình.
 \item \textbf{Cổng} (\texttt{D1\_GATE\_GRID=1}): RMSE vị trí của LQR và blend cho một cặp
-$(c_{\mathrm{low}},c_{\mathrm{high}})$, không cần teacher.
+$(c_{\mathrm{low}},c_{\mathrm{high}})$, gió huấn luyện, không cần teacher.
+\item \textbf{Chẩn đoán} (\texttt{D1\_DIAG=1}): teacher (trọng số Bryson) và LQR trên 4 quỹ đạo, gió huấn
+luyện: sai số trung vị/lớn nhất, tỉ lệ SQP hội tụ, số lần đặt lại.
 \end{itemize}
+Mọi chế độ trên đều theo quy tắc bay chung của Mục 4.1; surrogate và tin cậy dùng cho blend/$\cS$ đều lấy từ
+file \texttt{conf} (bộ điều khiển triển khai, Mục 2).
 Chỉ số co rút ($\Delta V_H$, $g_H$) chỉ được tính nội bộ để tạo nhãn $\cL$ (và chẩn đoán ở Khối A), không
 được báo như chỉ số đánh giá.
 
 \subsection{Đánh giá cuối với gió đo thực (\texttt{experiments/d1\_final\_eval.m})}
-Script riêng, chạy bằng workflow \texttt{d1-final-eval.yml}. \textbf{Mọi bộ điều khiển chỉ biết mô hình danh
+Script riêng, chạy bằng workflow \texttt{d1-final-eval.yml}; mỗi chain được đánh giá tại checkpoint mốc chỉ
+định (checkpoint cho trọng số teacher, file \texttt{conf} cùng mốc cho surrogate và tin cậy). \textbf{Mọi bộ
+điều khiển chỉ biết mô hình danh
 nghĩa}; plant thật là mẫu LHS của repo mà bộ điều khiển không biết.
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
 \item \textbf{Bộ điều khiển.} LQR (Mục 6); \textbf{LQI}: tăng cường $z_{k+1}=z_k+T_s\,e_{\mathrm{pos},k}$,
@@ -689,13 +728,14 @@ $F=(m/2.53)(c_1+c_2\norm{w})\,w$ với $(c_1,c_2)$ khớp bình phương tối t
 ở các mức gió ổn định; lấy $49$ s đầu. Dữ liệu được tải trong job CI, không lưu vào repo hay artifact.
 \item \textbf{Chỉ số} (mỗi chuyến $\times$ bộ điều khiển): RMSE và max sai số vị trí, RMSE vận tốc, tỉ số tốc
 độ trung bình, RMS gia số lệnh đã chuẩn hoá, thời gian tính mỗi bước (trung vị/p99/max, cùng loại máy),
-$\alpha$ trung bình, tỉ lệ hội tụ SQP của teacher. Một chuyến được tính là \emph{hoàn thành} khi trạng thái
-hữu hạn và max sai số vị trí $<5$ m. Ngoài CSV, lưu quỹ đạo đầy đủ của một chuyến đại diện cho mỗi họ (mức
-khó nhất, plant 1, chuỗi gió đầu) để vẽ hình.
+$\alpha$ trung bình, tỉ lệ hội tụ SQP của teacher, số lần đặt lại do phân kỳ. Mọi chuyến bay đủ $979$ bước
+theo quy tắc bay chung (Mục 4.1); sai số vị trí là sai số đã chặn $5$ m; RMSE vận tốc, tỉ số tốc độ và RMS gia
+số lệnh tính trên các bước không phân kỳ. Một chuyến được tính là \emph{hoàn thành} khi không có lần đặt lại
+nào và sai số chưa lần nào chạm mức chặn $5$ m. Ngoài CSV, lưu quỹ đạo đầy đủ của một chuyến đại diện cho mỗi
+họ (mức khó nhất, plant 1, chuỗi gió đầu) để vẽ hình.
 \end{itemize}
-Script cũ \texttt{experiments/\allowbreak d1\_wind\_eval.m} (workflow \texttt{d1-wind-\allowbreak eval.yml}) là bản đánh giá gió
-không có teacher (LQR, LQI và các biến thể blend, không có chặn NaN ở đầu ra mạng); kết quả chính
-lấy từ \texttt{d1\_\allowbreak final\_\allowbreak eval.m}.
+Đây là script đánh giá duy nhất; bản đánh giá gió cũ không có teacher (\texttt{d1\_wind\_eval.m}) đã được gỡ
+bỏ để mọi kết quả dùng cùng một bộ quy tắc.
 
 % ===================== 13 =====================
 \section{Bảng tham số cố định}
@@ -711,9 +751,12 @@ Số kịch bản robust & $M$ & $5$\\
 Cửa sổ co rút & $H$ & $20$ bước ($1.0$ s)\\
 Trọng số cuối kỳ & $Q_f$ & $Q_0$ (Bryson), cố định, SAC không chỉnh\\
 Phạt $\delta u$ & $dU$ & $0$\\
-Solver NLP & -- & \texttt{SQP\_RTI} (mặc định trong mã) / \texttt{SQP} ($\le50$ vòng, dùng cho mọi run)\\
+Solver NLP & -- & \texttt{SQP} ($\le50$ vòng; mặc định, dùng cho mọi run) / \texttt{SQP\_RTI} (tuỳ chọn)\\
 Áp nghiệm teacher & -- & status $0$ hoặc $2$ và hữu hạn; nếu không: giữ lệnh cũ, đặt lại solver\\
-Đặt lại solver & -- & đầu mỗi quỹ đạo và sau mỗi lần giải không dùng được\\
+Đặt lại solver & -- & đầu mỗi quỹ đạo, sau lần giải không dùng được, sau lần đặt lại do phân kỳ\\
+Phân kỳ & -- & lỗi tích phân, không hữu hạn hoặc $\norm{p}>10^4$ m; đặt lại trên tham chiếu, bay đủ\\
+Sai số bám & $e_k$ & chặn $5$ m; bước phân kỳ $=5$ m\\
+Resume & -- & đến mức từng quỹ đạo (iter dở dang lưu trong checkpoint)\\
 Độ dài mỗi quỹ đạo & -- & 1000 điểm ($50$ s); bay 979 bước\\
 Một lần chấm SAC & -- & 20 quỹ đạo rút có hoàn lại từ 120\\
 Môi trường huấn luyện & -- & plant danh nghĩa $+$ gió ngẫu nhiên, không nhiễu cảm biến\\

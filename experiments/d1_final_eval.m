@@ -10,9 +10,13 @@ function d1_final_eval()
 %   Teacher  SAC-NMPC teacher of the chain: scenario NMPC (acados, M=5 scenarios from
 %            the chain seed, N=20, Nc=5, D1_SOLVER) with Q,R = action_to_QR(tanh(mu))
 %            -- same teacher_step as training (solver reset per flight and after a failed solve)
-%   P        proposed blend u = sat(uh - K e + alpha*Du)         (pipeline fly_gate (d))
+%   P        proposed blend u = sat(uh - K e + alpha*Du)         (pipeline blend_control)
 %   PI       proposed + I on the LQI base u = sat(uh - Kx e - KI z + alpha*Du)
 % Integral states use clamping anti-windup (no integration on saturated steps).
+% Flight rules are the pipeline's COMMON rules (plant_step, track_err): real time,
+% every flight runs its full length, a divergence restarts the plant on the reference
+% (controller state reset) and is counted; per-step position error capped at 5 m, a
+% diverged step counts as 5 m; completed = no restart and never at the cap.
 %
 % Conditions (D1_COND):
 %   train : train plants (LHS 5) x 15 ID references (5 families x {v4 a2, v8 a5, v12 a9})
@@ -33,7 +37,7 @@ ctrls = strtrim(strsplit(getenv_str('D1_CTRLS', 'LQR,LQI,MPC'), ','));
 tag = getenv_str('D1_TAG', 'base'); cond = getenv_str('D1_COND', 'train');
 sur = []; conf = []; teacher = []; mp = []; ckIter = NaN;
 if any(ismember(ctrls, {'Teacher', 'P', 'PI'}))
-    S = load(getenv('D1_CKPT')); sur = S.sur; conf = pick_conf(S, getenv_str('D1_CONF', ''));
+    S = load(getenv('D1_CKPT')); [sur, conf] = deployed_pair(S, getenv_str('D1_CONF', ''));
     ckIter = S.st.iter;
     L = S.sur.net.Learnables; nb = 0; nt = 0;
     for q = 1:height(L), v = extractdata(L.Value{q}); nb = nb + sum(~isfinite(v(:))); nt = nt + numel(v); end
@@ -58,13 +62,13 @@ rows = {}; TR = struct('flight',{},'family',{},'id',{},'ctrl',{},'X',{},'U',{},'
 for i = sel
     f = F(i); ln = sprintf('FL %4d %-5s %-50s', i, cond, f.id);
     for c = 1:numel(ctrls)
-        [X, U, tm, aux, conv] = fly_one(kindOf(ctrls{c}), f, cfg, lqr, sur, conf, KI, KxLQI, mp, teacher);
-        Xr = f.Xref(:, 2:size(X,2)+1); m = metr(X, U, Xr, tm, cfg);
+        [X, U, tm, aux, conv, nDiv] = fly_one(kindOf(ctrls{c}), f, cfg, lqr, sur, conf, KI, KxLQI, mp, teacher);
+        Xr = f.Xref(:, 2:size(X,2)+1); m = metr(X, U, Xr, tm, cfg, nDiv);
         a = mean(aux(isfinite(aux))); cv = mean(conv(isfinite(conv)));
-        ln = [ln sprintf(' | %s %s pos=%.4f vel=%.4f pmax=%.3f tmed=%.1f aux=%.2f', ...
-            ctrls{c}, okc(m.ok), m.pos, m.vel, m.pmax, m.tmed, a)]; %#ok<AGROW>
+        ln = [ln sprintf(' | %s %s pos=%.4f vel=%.4f pmax=%.3f restarts=%d tmed=%.1f aux=%.2f', ...
+            ctrls{c}, okc(m.ok), m.pos, m.vel, m.pmax, nDiv, m.tmed, a)]; %#ok<AGROW>
         rows(end+1, :) = {cond, tag, cfg.seed, ckIter, i, f.family, f.level, f.ref, f.plant, f.wind, ...
-            ctrls{c}, double(m.ok), m.pos, m.pmax, m.vel, m.spd, m.duRms, m.tmed, m.tp99, m.tmax, a, cv}; %#ok<AGROW>
+            ctrls{c}, double(m.ok), nDiv, m.pos, m.pmax, m.vel, m.spd, m.duRms, m.tmed, m.tp99, m.tmax, a, cv}; %#ok<AGROW>
         if f.rep
             TR(end+1) = struct('flight', i, 'family', f.family, 'id', f.id, 'ctrl', ctrls{c}, ...
                 'X', single(X), 'U', single(U), 'Xr', single(Xr), 'alpha', single(aux)); %#ok<AGROW>
@@ -75,7 +79,7 @@ end
 out = getenv_str('D1_OUT', fullfile('results', 'final_eval'));
 if ~isfolder(out), mkdir(out); end
 T = cell2table(rows, 'VariableNames', {'cond','tag','seed','ckpt_iter','flight','family','level','ref', ...
-    'plant','wind','ctrl','ok','pos_rmse','pos_max','vel_rmse','speed_ratio','du_rms','t_med_us', ...
+    'plant','wind','ctrl','ok','restarts','pos_rmse','pos_max','vel_rmse','speed_ratio','du_rms','t_med_us', ...
     't_p99_us','t_max_us','alpha_mean','teacher_conv'});
 base = sprintf('%s_%s_%dof%d', cond, tag, sh(1), sh(2));
 writetable(T, fullfile(out, ['final_eval_' base '.csv']));
@@ -164,13 +168,15 @@ ds = @(t, x, u, th) struct('force', [Gx(t); Gy(t); Gz(t)], 'torque', zeros(3,1))
 end
 
 % ---- closed-loop flight ---------------------------------------------------------
-function [X, U, tm, aux, conv] = fly_one(kind, f, cfg, lqr, sur, conf, KI, KxLQI, mp, teacher)
-% Real time (k-1)*Ts is passed to the plant so the time-varying wind acts.
+function [X, U, tm, aux, conv, nDiv] = fly_one(kind, f, cfg, lqr, sur, conf, KI, KxLQI, mp, teacher)
+% One flight with the COMMON flight rules of the training pipeline: real time
+% (k-1)*Ts, plant_step, full length; after a divergence the plant restarts on the
+% reference and the controller's internal state (histories, u_prev, integrator z,
+% solver / active set) is reset. Diverged steps stay NaN in X; nDiv counts restarts.
 Ts = cfg.Ts; N = cfg.N; Xref = f.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
 uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
 lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
-X = nan(12,T); U = nan(4,T); tm = nan(1,T); aux = nan(1,T); conv = nan(1,T);
-haveConf = ~isempty(conf) && isfield(conf,'LQR') && ~isempty(conf.LQR.w);
+X = nan(12,T); U = nan(4,T); tm = nan(1,T); aux = nan(1,T); conv = nan(1,T); nDiv = 0;
 x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4); zI = zeros(3,1);
 uprev = uh; if kind == 'M', ws.iA = false(size(mp.bin)); end
 if kind == 'T', teacher_reset(teacher, Xref, 1, uh, cfg); end     % clean solver per flight
@@ -187,32 +193,25 @@ for k = 1:T
         case 'T'   % identical to training: teacher_step (reset after a failed solve)
             [u, status] = teacher_step(teacher, x, uprev, Xref, k, uh, cfg); conv(k) = (status == 0);
             u = min(max(u,lo),hi); uprev = u;
-        case {'P', 'J'}
-            if kind == 'J'
-                uLk = uh - KxLQI*e - KI*zI;                % LQI base [Kx, KI]
-            else
-                uLk = uh - lqr.K*e;                        % pipeline blend base
-            end
-            feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
-            if all(isfinite(feat))
-                du = surrogate_predict_du(sur, feat); cS = surrogate_predict_cs(sur, feat);
-                if ~all(isfinite([du; cS])), du = zeros(4,1); cS = 0; end   % NaN guard -> pure base
-            else
-                du = zeros(4,1); cS = 0;
-            end
-            if haveConf, cLp = predict_logistic(conf.LQR, conf_feature_online(e).'); else, cLp = 0; end
-            gL = min(max((cfg.cHigh - cLp)/(cfg.cHigh - cfg.cLow), 0), 1);
-            alpha = cS * gL;
-            if cfg.alphaSafe
-                alpha = min(alpha, (1-cfg.epsSafe)*alpha_bar_est(e, du, lqr));
-            end
-            uu = uLk + alpha*du; u = min(max(uu, lo), hi); aux(k) = alpha;
+        case 'P'   % proposed: blend on the LQR base (pipeline blend_control)
+            [u, aux(k)] = blend_control(uh - lqr.K*e, e, stateHist, inputHist, ...
+                Xref(:,k:k+10), sur, conf, lqr, cfg);
+        case 'J'   % proposed + I: same blend on the LQI base [Kx, KI]
+            [u, aux(k), uu] = blend_control(uh - KxLQI*e - KI*zI, e, stateHist, inputHist, ...
+                Xref(:,k:k+10), sur, conf, lqr, cfg);
     end
     if any(kind == 'QJ') && all(u == uu), zI = zI + Ts*e(1:3); end   % clamping anti-windup
     tm(k) = toc(t0); U(:,k) = u;
     if any(kind == 'PJ'), stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u]; end
-    x = quad_step_rk4((k-1)*Ts, x, u, Ts, f.theta, f.ds); X(:,k) = x;
-    if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, X(:,k:end) = NaN; break; end
+    [x, div] = plant_step((k-1)*Ts, x, u, Ts, f.theta, f.ds);
+    if div
+        nDiv = nDiv + 1; x = Xref(:,k+1);
+        stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4); zI = zeros(3,1); uprev = uh;
+        if kind == 'M', ws.iA = false(size(mp.bin)); end
+        if kind == 'T', teacher_reset(teacher, Xref, k+1, uh, cfg); end
+    else
+        X(:,k) = x;
+    end
 end
 end
 
@@ -255,21 +254,32 @@ u = min(max(mp.uh + dU(1:4), mp.lo), mp.hi);
 end
 
 % ---- metrics / misc -------------------------------------------------------------
-function m = metr(X, U, Xr, tm, cfg)
+function m = metr(X, U, Xr, tm, cfg, nDiv)
+% Position metrics use the common capped per-step error (track_err: 5 m cap, a diverged
+% step counts as 5 m) over the FULL flight. Completed = no restart and never at the cap.
 tv = tm(isfinite(tm))*1e6; m.tmed = median(tv); m.tp99 = prctile(tv, 99); m.tmax = max(tv);
-m.ok = all(isfinite(X(:)));
-if ~m.ok, m.pos = NaN; m.vel = NaN; m.pmax = NaN; m.spd = NaN; m.duRms = NaN; return; end
-ep = vecnorm(X(1:3,:) - Xr(1:3,:)); ev = vecnorm(X(7:9,:) - Xr(7:9,:));
-m.pos = sqrt(mean(ep.^2)); m.vel = sqrt(mean(ev.^2)); m.pmax = max(ep);
-m.spd = mean(vecnorm(X(7:9,:))) / mean(vecnorm(Xr(7:9,:)));
-dU = diff(U, 1, 2) ./ cfg.resHalf;                    % input increments, surrogate normalization
+ep = track_err(X, Xr);
+m.pos = sqrt(mean(ep.^2)); m.pmax = max(ep);
+m.ok = (nDiv == 0) && (m.pmax < 5);
+fin = all(isfinite(X), 1);
+ev = vecnorm(X(7:9,fin) - Xr(7:9,fin)); m.vel = sqrt(mean(ev.^2));
+m.spd = mean(vecnorm(X(7:9,fin))) / mean(vecnorm(Xr(7:9,fin)));
+dU = diff(U, 1, 2) ./ cfg.resHalf; dU = dU(:, all(isfinite(dU), 1));
 m.duRms = sqrt(mean(dU(:).^2));
 end
 
 function s = okc(ok), if ok, s = 'OK'; else, s = 'NO'; end, end
 
-function c = pick_conf(S, confFile)
-if isfield(S,'conf'), c = S.conf; elseif ~isempty(confFile) && isfile(confFile), C = load(confFile); c = C.conf; else, c = []; end
+function [sur, conf] = deployed_pair(S, confFile)
+% Deployed controller = consolidated surrogate + conf saved together by the pipeline's
+% consolidate_confidence (conf file). Without a conf file: training surrogate, no c_LQR.
+sur = S.sur; conf = [];
+if ~isempty(confFile) && isfile(confFile)
+    C = load(confFile); conf = C.conf;
+    if isfield(C, 'sur'), sur = C.sur; end
+else
+    fprintf('WARN no conf file (%s): training surrogate without consolidated c_S / c_LQR\n', confFile);
+end
 end
 
 % ============================================================================
@@ -285,7 +295,7 @@ cfg.stopIter = getenv_num('D1_STOP_ITER', 0);        % stop exactly at this SAC 
 cfg.resume = strcmp(getenv_str('D1_RESUME','0'),'1');
 cfg.Ts = 0.05; cfg.N = 20; cfg.Nc = 5; cfg.H = 20; cfg.Qf = 0; cfg.dU = 0;
 cfg.M = 5;                                          % robust scenarios (frozen)
-cfg.solverType = getenv_str('D1_SOLVER', 'SQP_RTI'); % 'SQP_RTI' (fast) | 'SQP' (accurate)
+cfg.solverType = getenv_str('D1_SOLVER', 'SQP');     % 'SQP' (used by every run) | 'SQP_RTI'
 cfg.stepsPerCase = getenv_num('D1_STEPS', 1000);
 cfg.casesPerEval = getenv_num('D1_CASES_PER_EVAL', 20);
 cfg.plant = d1_joint_plant_params();
@@ -482,6 +492,49 @@ else
     u = uprev;
     teacher_reset(teacher, Xref, min(k+1, size(Xref,2)-N), uh, cfg);
 end
+end
+
+function [x, div] = plant_step(t, x, u, Ts, theta, ds)
+% One RK4 plant step at real time t. Divergence = integration error (e.g. singular
+% ZYX Euler rates at pitch = +-90 deg), a non-finite state, or |p| > 1e4 m. A diverged
+% flight is NOT stopped: the caller charges the step, restarts the plant on the
+% reference, resets its controller's internal state and keeps flying to the end.
+try
+    x = quad_step_rk4(t, x, u, Ts, theta, ds);
+catch
+    x = nan(12,1);
+end
+div = ~all(isfinite(x)) || norm(x(1:3)) > 1e4;
+end
+
+function e = track_err(X, Xr)
+% Per-step position tracking error ||p_k - p_ref,k+1||, capped at 5 m; a diverged step
+% (stored as a NaN state) counts as the cap. Same definition as the training reward.
+e = vecnorm(X(1:3,:) - Xr(1:3,:));
+e(~isfinite(e)) = 5; e = min(e, 5);
+end
+
+function [u, alpha, uu] = blend_control(uBase, e, stateHist, inputHist, XrefLook, sur, conf, lqr, cfg)
+% Deployed controller: u = sat(uBase + alpha*Du), alpha = c_S * g_L(c_LQR),
+% g_L = clip((c_high - c_LQR)/(c_high - c_low), 0, 1); optional alpha_safe. uBase is the
+% UNSATURATED base law (u_h - K e for the proposed controller). Non-finite feature or
+% network output -> Du = 0, c_S = 0 (pure base). uu = unsaturated sum (for anti-windup).
+lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+feat = surrogate_build_feature(stateHist, inputHist, XrefLook, zeros(12,1));
+du = zeros(4,1); cS = 0;
+if all(isfinite(feat))
+    du = surrogate_predict_du(sur, feat); cS = surrogate_predict_cs(sur, feat);
+    if ~all(isfinite([du; cS])), du = zeros(4,1); cS = 0; end
+end
+haveConf = ~isempty(conf) && isfield(conf,'LQR') && ~isempty(conf.LQR.w);
+if haveConf, cLp = predict_logistic(conf.LQR, conf_feature_online(e).'); else, cLp = 0; end
+gL = min(max((cfg.cHigh - cLp)/(cfg.cHigh - cfg.cLow), 0), 1);
+alpha = cS * gL;
+if cfg.alphaSafe
+    alpha = min(alpha, (1-cfg.epsSafe)*alpha_bar_est(e, du, lqr));
+end
+uu = uBase + alpha*du;
+u = min(max(uu, lo), hi);
 end
 
 function du = surrogate_predict_du(sur, feat)

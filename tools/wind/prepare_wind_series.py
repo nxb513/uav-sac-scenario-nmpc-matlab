@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build world-frame wind-force series (t, Fx, Fy, Fz [N]) for experiments/d1_wind_eval.m.
+"""Build world-frame wind-force series (t, Fx, Fy, Fz [N]) for experiments/d1_final_eval.m.
 
 The raw data are downloaded at run time from their original sources and are NOT stored
 in this repository or uploaded as artifacts (Neural-Fly data: personal/educational use

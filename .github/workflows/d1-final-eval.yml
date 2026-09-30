@@ -10,9 +10,8 @@ on:
   workflow_dispatch:
     inputs:
       chains:
-        description: 'JSON list of chains: [{"seed":..,"rqr":0|1,"dec":..,"run":"<run id holding the checkpoint>"}]'
+        description: 'JSON list of chains [{"seed":..,"rqr":0|1,"dec":..,"run":"<run id holding the checkpoint artifact>","suffix":"_iter0500"}] (suffix selects a milestone file; no default: pick the checkpoints explicitly)'
         required: true
-        default: '[{"seed":260914201,"rqr":0,"dec":0.5,"run":"36382794014"},{"seed":260914001,"rqr":0,"dec":1.5,"run":"36382800901"},{"seed":260914301,"rqr":0,"dec":3,"run":"36382814947"},{"seed":260914101,"rqr":1,"dec":1.5,"run":"36382808189"},{"seed":260914102,"rqr":1,"dec":1.5,"run":"36382808189"},{"seed":260914103,"rqr":1,"dec":1.5,"run":"36382808189"},{"seed":260914104,"rqr":1,"dec":1.5,"run":"36382808189"},{"seed":260914105,"rqr":1,"dec":1.5,"run":"36382808189"}]'
         type: string
       conds:
         description: 'JSON array of conditions (train | ood)'
@@ -96,8 +95,8 @@ jobs:
       D1_COND: ${{ matrix.cond }}
       D1_CTRLS: ${{ inputs.chain_ctrls }}
       D1_TAG: c${{ matrix.chain.seed }}
-      D1_CKPT: ${{ github.workspace }}/ckpt/checkpoint_seed${{ matrix.chain.seed }}.mat
-      D1_CONF: ${{ github.workspace }}/ckpt/conf_seed${{ matrix.chain.seed }}.mat
+      D1_CKPT: ${{ github.workspace }}/ckpt/checkpoint_seed${{ matrix.chain.seed }}${{ matrix.chain.suffix || '' }}.mat
+      D1_CONF: ${{ github.workspace }}/ckpt/conf_seed${{ matrix.chain.seed }}${{ matrix.chain.suffix || '' }}.mat
       D1_WIND_DIR: ${{ github.workspace }}/wind/series
       D1_OUT: ${{ github.workspace }}/results/final_eval
     steps:

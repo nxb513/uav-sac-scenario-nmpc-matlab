@@ -53,9 +53,9 @@ on:
         default: "[260914001, 260914002, 260914003, 260914004, 260914005]"
         type: string
       solver:
-        description: "NMPC solver: SQP_RTI (fast) or SQP (accurate)"
+        description: "NMPC solver: SQP (used by every run) or SQP_RTI"
         required: false
-        default: "SQP_RTI"
+        default: "SQP"
         type: string
       resume_run_id:
         description: Prior run id to resume checkpoints from (empty = fresh)
