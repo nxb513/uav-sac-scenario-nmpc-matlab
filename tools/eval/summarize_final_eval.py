@@ -3,6 +3,8 @@
 
 Controller label: baseline controllers keep their name (LQR, LQI, MPC); chain-specific
 ones are tagged with the chain seed suffix and checkpoint iteration, e.g. Teacher@201(i500).
+Teacher = SAC-NMPC told the exact current wind force (oracle, not deployable); P = the
+deployed proposed controller (LQR base + gated surrogate, does not know the wind).
 
 Flights always run their full length (common flight rules of the pipeline): a divergence
 restarts the plant on the reference and is counted in `restarts`. Position errors are
@@ -43,11 +45,17 @@ def main(folder):
         if d.empty:
             continue
         print(f"## Condition `{cond}` ({d['flight'].nunique()} flights)\n")
-        base = d[(d['label'] == 'LQI') & d['done']].set_index('flight')['pos_rmse']
+        refs = {r: d[(d['label'] == r) & d['done']].set_index('flight')['pos_rmse'] for r in ('LQR', 'LQI')}
+
+        def wins(lab, ok, ref):
+            b = refs[ref]
+            if lab == ref or b.empty:
+                return '—'
+            j = ok.set_index('flight')['pos_rmse'].to_frame().join(b.rename('b'), how='inner')
+            return f"{int((j['pos_rmse'] < j['b']).sum())}/{len(j)}"
         stats = []
         for lab, x in d.groupby('label'):
             ok = x[x['done']]
-            j = ok.set_index('flight')['pos_rmse'].to_frame().join(base.rename('b'), how='inner')
             stats.append(dict(label=lab, n=len(x), done=len(ok), restarts=int(x['restarts'].sum()),
                               pos_med=ok['pos_rmse'].median(), pos_mean=ok['pos_rmse'].mean(),
                               pos_all=x['pos_rmse'].median(),
@@ -55,16 +63,16 @@ def main(folder):
                               du_med=ok['du_rms'].median(), t_med=x['t_med_us'].median(),
                               t_p99=x['t_p99_us'].median(), alpha=ok['alpha_mean'].mean(),
                               conv=x['teacher_conv'].mean(),
-                              wins='—' if lab == 'LQI' or base.empty else f"{int((j['pos_rmse'] < j['b']).sum())}/{len(j)}"))
+                              wLQR=wins(lab, ok, 'LQR'), wLQI=wins(lab, ok, 'LQI')))
         st = pd.DataFrame(stats).sort_values(['done', 'pos_med'], ascending=[False, True])
         print('| controller | completed | restarts | pos RMSE med (completed) [m] | pos RMSE mean (completed) '
               '| pos RMSE med (all, capped) | max pos err med | vel RMSE med | du RMS med | t/step med [us] '
-              '| t/step p99 [us] | better than LQI | mean alpha | NMPC conv |')
-        print('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|')
+              '| t/step p99 [us] | better than LQR | better than LQI | mean alpha | NMPC conv |')
+        print('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|')
         for _, r in st.iterrows():
             print(f"| {r['label']} | {r['done']}/{r['n']} | {r['restarts']} | {fmt(r['pos_med'])} | "
                   f"{fmt(r['pos_mean'])} | {fmt(r['pos_all'])} | {fmt(r['pmax_med'], 3)} | {fmt(r['vel_med'])} | "
-                  f"{fmt(r['du_med'])} | {fmt(r['t_med'], 1)} | {fmt(r['t_p99'], 1)} | {r['wins']} | "
+                  f"{fmt(r['du_med'])} | {fmt(r['t_med'], 1)} | {fmt(r['t_p99'], 1)} | {r['wLQR']} | {r['wLQI']} | "
                   f"{fmt(r['alpha'], 3)} | {fmt(r['conv'], 3)} |")
         print('\nPer family: pos RMSE median over completed flights (not completed)\n')
         print('| controller | ' + ' | '.join(FAMS) + ' |')

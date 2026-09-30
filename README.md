@@ -1,168 +1,89 @@
-# UAV SAC-Scenario-NMPC MATLAB Checkpoint Stream
+# UAV SAC-Scenario-NMPC (MATLAB) — method D1
 
-This public research package contains an episode-based, resumable training
-stream for a continuous SAC policy that configures a scenario-NMPC teacher for
-a 12-state uncertain quadrotor. The research budget is counted in episodes,
-not transitions. The current candidate ceiling is 1,500 episodes and remains
-subject to review.
+The active method of this repository is **D1**. Its complete description (Vietnamese)
+is `docs/D1_method.pdf` (source `docs/D1_method.tex`); the document is kept in sync with
+the code, and the code is authoritative. Earlier pipelines are superseded and described
+only in `docs/legacy_pipeline.md`.
 
-## Training definition
+## Method in one page
 
-- State: `[px, py, pz, phi, theta, psi, vx, vy, vz, p, q, r]`.
-- Input: `[T, tau_phi, tau_theta, tau_psi]`.
-- SAC action: six normalized NMPC weight groups, prediction horizon `N`, and
-  control horizon `Nc`.
-- SAC observation: 328D `causal_feature_v2`, comprising four measured states,
-  four applied inputs, reference preview `k:k+20`, and a nominal one-step
-  prediction residual with wrapped Euler entries. Solve time, teacher
-  prediction and future disturbance realization are excluded.
-- Horizon candidates: `N in {5,10,15,20}` and
-  `Nc in {2,5,10,15,20}`, constrained by `Nc <= N` (14 feasible pairs).
-- Scenario count: fixed at `M=5`.
-- Parallelization: one central SAC agent/replay stream and three synchronous
-  environment workers.
-- Episode: at most 200 control steps at `Ts=0.05 s`.
-- Checkpoint: exact-resume artifact every 50 episodes.
-- Contexts: the locked C012 hard-event rule uses `H=20`, position `0.10 m`,
-  attitude `5 deg`, velocity `0.30 m/s`, body rate `2 rad/s`, growth factor
-  `2`, and five consecutive growth steps. Growth-only remains auxiliary.
-- Disturbance and parametric uncertainty are both active in the context bank.
-- NMPC solve time has zero reward weight.
-- Actuator command limits are fixed nominal hardware limits and do not grow
-  with mass uncertainty or payload shifts. The old arbitrary +/-20 m position
-  termination is removed; declared NMPC state bounds remain active.
+- **Deployed controller (P):** `u = sat( sat(u_LQR) + alpha * Du )`,
+  `alpha = c_S * g_L(c_LQR)`, `g_L = clip((c_high - c_LQR)/(c_high - c_low), 0, 1)`,
+  `c_low = 0.3`, `c_high = 0.7`. `u_LQR = u_h - K (x - x_ref)` is a Bryson LQR on the
+  nominal hover model. No optimization is solved online.
+- **Teacher (training only, and oracle in evaluation):** SAC-tuned scenario NMPC
+  (acados, M = 5 model scenarios, N = 20, Nc = 5, SQP). It is told the exact current wind
+  force (privileged information, simulation only), which enters its prediction model and
+  a wind-consistent flat reference (offset-free MPC target). It is not deployable.
+- **Surrogate:** one network with two heads. The residual head is trained on
+  `Du* = u_teacher - sat(u_LQR)` at the teacher's states; the `c_S` head predicts recent
+  tracking quality. Its 208-D input holds `x_{k-3..k}` (current state included),
+  `u_{k-4..k-1}`, `x_ref,k..k+10` and the nominal one-step prediction residual
+  `r_k = x_k - Phi_nom(x_{k-1}, u_{k-1})`. The surrogate never sees the wind; it has to
+  infer it from `r_k`.
+- **Confidences:** `c_S` (surrogate head, trained at alpha = 1) and `c_LQR` (logistic
+  model of LQR Lyapunov contraction over H = 20 steps), both learned in the training wind.
+- **Training environment:** nominal plant plus random synthetic wind (mean 1-10 m/s,
+  Dryden low-altitude gusts, linear rotor drag). Measured wind data are **never** used in
+  training; they are only used in the final evaluation.
 
-## Approved reference envelope
+## Code map
 
-The in-distribution speed anchors are
-`{0.5,1,2,4,6,8,10,12} m/s` for circle, lemniscate, vertical circle,
-spatial helix and smooth waypoints. Geometry is scaled using the approved
-speed-feasible load levels. At `0.5 m/s`, the resolved targets are approximately
-`{0.20,0.46,0.83} m/s^2`; at `1 m/s` they are
-`{0.74,1.85,3.33} m/s^2`; from `2 m/s` upward the full `{2,5,9} m/s^2`
-targets apply, subject to the vertical-circle workspace limit. Every generated
-reference must meet the realized-speed and realized-acceleration tolerances.
-The candidate OOD anchors `{14,16} m/s` remain locked.
+| File | Role |
+|---|---|
+| `experiments/run_d1_joint_pipeline.m` | Training (SAC + teacher + streaming surrogate), consolidation (`c_S`, `c_LQR`), diagnostic modes |
+| `experiments/d1_final_eval.m` | Final evaluation: LQR, LQI, linear MPC (N = 5), Teacher (oracle), P under measured wind |
+| `src/joint/d1_*.m` | The single shared definitions used by both scripts (see `src/joint/README.md`) |
+| `src/joint/d1_teacher_build_solver.m` | acados scenario-NMPC teacher with the wind-force parameter |
+| `tools/wind/` | Download and convert measured wind (validation only, inside CI jobs) |
+| `tools/eval/summarize_final_eval.py` | Markdown summary of the final-evaluation CSVs |
 
-## Solver guard
+All other scripts in `experiments/` belong to earlier stages and are not part of the current
+pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `select_d1_teacher`,
+`build_d1_*`, `d1_acados_teacher_verify` and `test_d1_lyapunov_contraction`.
 
-The GitHub workflow applies a candidate wall-time guard to each `fmincon`
-solve through `NMPC_MAX_WALL_SECONDS`. Its default is 60 seconds and the
-manual workflow offers 30, 60, or 120 seconds. This is an execution safety
-setting for the runner, not a final research hyperparameter. A stopped
-solve is logged and follows the existing solver-failure termination path.
+## Common flight rules (all training, diagnostic and evaluation flights)
 
-The underlying MATLAB configuration defaults to `Inf`; therefore the guard
-is not silently imposed on other experiments.
+- Every flight lasts 979 steps (`Ts = 0.05 s`) and always runs to the end.
+- A divergence (integration error, non-finite state or `|p| > 1e4 m`) restarts the plant
+  on the reference, resets the controller's internal state and is counted.
+- The per-step position error is capped at 5 m; a diverged step counts as 5 m.
+- A teacher solve is *usable* when its status is 0 or 2 and the result is finite. Usable
+  solves are applied and used as labels. Otherwise the last input is held and the solver
+  is reset. The SAC reward's failure rate counts the unusable steps.
 
-## Run on GitHub Actions
+## GitHub workflows
 
-The obsolete low-speed and legacy noncausal context banks have been removed.
-Frozen LQR `R_089` and
-its SHA-256 provenance are committed as a small reproducibility input. C012
-was selected only from independent LQR validation run `33501219369`; the SAC
-workflow does not reuse those episodes. Instead, every long SAC job rebuilds
-the teacher-training bank deterministically from seed `300830301`: 2,700
-source episodes over 135 cells, 400 LQR steps per episode, and enough reference
-continuation for a 200-step SAC episode plus `Nmax=20`.
+- **D1 joint pipeline** (`.github/workflows/d1-joint-pipeline.yml`). Main inputs:
+  `seeds`, `random_qr`, `logmult_dec`, `wall_seconds`, `stop_iter`, `ckpt_every`, `wind`,
+  `solver`, and `resume_run_id` (empty means a fresh start). Artifact per seed:
+  `d1-joint-ckpt-seed<seed>-<run_id>`. It contains `checkpoint_seed<s>.mat` and
+  `conf_seed<s>.mat` (the deployed pair), plus milestone copies
+  `checkpoint_seed<s>_iter<NNNN>.mat` and `conf_seed<s>_iter<NNNN>.mat` every 50
+  iterations. Diagnostic mode inputs: `diag`, `surr_eval`, `compare` (with `hard`,
+  `plant_perturb`), `consolidate`. The gate-grid mode (`D1_GATE_GRID=1`) exists in the
+  code but has no workflow input.
+- **D1 final evaluation** (`.github/workflows/d1-final-eval.yml`). Inputs: `chains`
+  (JSON list of `{seed, rqr, dec, run, suffix}`), `conds` (`train`, `ood`), `chain_ctrls`
+  (`Teacher,P`) and `base_ctrls` (`LQR,LQI,MPC`). It writes CSVs, representative
+  trajectories and a Markdown summary.
 
-The builder stores hard-event contexts for specialist training, growth-only
-contexts as an explicitly labeled curriculum boundary stratum, and safe
-contexts for audit only. Stages 1-3 may use hard plus growth-only contexts;
-stage 4 uses hard contexts only. Growth-only is never relabeled as a hard
-confidence target.
+Other `matlab-*.yml` workflows belong to the legacy pipeline.
 
-Before launching SAC, run **MATLAB C012 NMPC feasibility screen**. It rebuilds
-and audits the independent bank, verifies the 14-pair teacher contract, then
-runs 210 bounded solves over five trajectory families, three Q/R profiles and
-all horizon pairs at fixed `M=5`. This screen separates solver convergence,
-constraint feasibility and wall-time termination; it does not train SAC or
-select the final grid.
+## Data
 
-The next development gate is **MATLAB targeted teacher closed-loop
-capability**. It evaluates 90 resumable paired tasks: five trajectory families,
-three within-family LQR lead-time ranks, three representative horizon/weight
-anchors and two solver algorithms. Each task rolls the teacher for H=20 on the
-same plant, reference and disturbance as its frozen LQR counterfactual. This
-gate does not reduce the 14-pair SAC grid or authorize a solver/acceptance
-change; it records converged, feasible-suboptimal, event-avoidance, constraint
-and latency evidence for review.
-
-Run `MATLAB finalize targeted LQR selection` after the 250-candidate design
-artifact is available. This inexpensive stage rebuilds only the corrected
-1,350-episode selection bank and re-evaluates the frozen design top five. It
-prevents a reference outside the declared state workspace from influencing the
-final LQR while avoiding an unnecessary repeat of the clean design phase.
-
-After v6 succeeds, run `MATLAB screen targeted LQR weakness` with the v6 run
-ID. It builds a fresh 2,700-episode bank from seed `300830201`, runs only the
-frozen LQR for 200 steps per episode, and saves full traces plus global,
-per-family and per-speed/load summaries. The reported 5/10/20-step prevalence
-grid is diagnostic; final divergence thresholds are selected afterward and
-are never tuned on OOD/test data.
-
-1. Keep this repository public.
-2. Open **Actions > MATLAB retune strong targeted LQR** and dispatch it.
-3. Download and review the `lqr-retune-realized-coverage-v5-*` artifact.
-4. Open **Actions > MATLAB SAC-NMPC checkpoint stream** only after reviewing
-   the locally measured context-bank coverage and the SAC runtime probe.
-5. The first causal-v2 run must use `fresh_start=true`. Resume accepts only a
-   prior causal-v2 artifact with matching 328D contract metadata; legacy 31D
-   checkpoints/replay are rejected.
-6. Choose the candidate per-solve guard and run the workflow.
-7. The job rebuilds and audits C012 contexts before training. Download the
-   `sac-nmpc-checkpoint-stream-*` artifact when the job ends.
-
-The job uses the official
-[`matlab-actions/setup-matlab@v3`](https://github.com/matlab-actions/setup-matlab)
-and
-[`matlab-actions/run-command@v3`](https://github.com/matlab-actions/run-command)
-actions with MATLAB R2024a. MathWorks automatically licenses supported
-products for workflows in public repositories. No local MATLAB installation,
-license file, batch token, MATLAB Compiler, or MATLAB Coder is included.
-
-## Expected outputs
-
-The LQR retune writes:
-
-```text
-results/targeted_lqr_weak_rebuild_v1/lqr_retune_realized_coverage_v5/
-```
-
-It contains the two reproducible bank manifests, all candidate metrics,
-rankings, frozen `selected_lqr.mat`, report and completion marker. SAC outputs
-are written under:
-
-```text
-results/targeted_lqr_weak_rebuild_v1/specialist_sac_causal_v2/
-  checkpoint_stream_runs/run_<github-run-id>/
-```
-
-The artifact includes configuration, episode manifests/logs, MATLAB diary,
-training statistics, and recoverable `AgentK.mat` checkpoints.
-`SolverTimedOut` is recorded at every environment step.
-
-## Continuous checkpoint stream
-
-The manual workflow continues one central SAC agent with three synchronous
-workers. The MATLAB training step runs until its five-hour GitHub execution
-limit or the 1,500-episode candidate ceiling, whichever occurs first, and
-saves an exact-resume `AgentK.mat` every 50 episodes.
-
-Provide the previous GitHub run ID when dispatching the workflow. The code
-recursively selects the numerically largest valid `AgentK.mat`. If execution
-stops after episode 146, for example, only `Agent100.mat` is resumed; episodes
-101--146 are intentionally discarded.
-
-The five-hour limit is an execution boundary. The 1,500-episode ceiling is a
-candidate study bound, not a claim that this is the optimal training budget.
-Each new run is dispatched manually after checking the preceding artifact;
-the workflow does not chain jobs automatically.
+Measured wind for validation: Neural-Fly (O'Connell et al., 2022; personal/educational
+use only, not redistributed) and SWUF-3D (Zenodo 17700905, CC-BY 4.0). Both are downloaded
+from their sources inside the CI job and are never committed or uploaded. See
+`DATA_PROVENANCE.md`.
 
 ## Scope and licensing
 
-This repository is a public computational runner, not the complete research
-project. It contains no papers, manuscript, OOD test set, hybrid-controller
-results, legacy checkpoints, or private credentials. No reuse license has
-been selected yet; publication on GitHub does not by itself grant an
-open-source license.
+This repository is a public computational runner, not the complete research project. It
+contains no papers, manuscript, trained checkpoints or private credentials. Trained
+checkpoints live only in the GitHub Actions artifacts of the runs. No reuse license has
+been selected yet; publication on GitHub does not by itself grant an open-source license.
+
+MATLAB R2024a runs through the official `matlab-actions/setup-matlab@v3` and
+`matlab-actions/run-command@v3`. MathWorks licenses supported products for workflows in
+public repositories; no license file or token is included.

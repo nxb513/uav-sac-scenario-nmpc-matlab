@@ -1,5 +1,26 @@
 # Publication Manifest
 
+## Method D1 (active)
+
+The public package contains, for method D1 (`docs/D1_method.pdf`):
+
+- the training pipeline `experiments/run_d1_joint_pipeline.m` and the final evaluation
+  `experiments/d1_final_eval.m`;
+- the shared D1 definitions `src/joint/d1_*.m` (configuration, flight rules, acados
+  teacher with wind parameter, teacher target/step, surrogate history/feature, deployed
+  blend) and the plant/reference utilities they call (`configs/step1_plant_config.m`,
+  `quad_dynamics`, `quad_step_rk4`, reference generators, `targeted_lqr_weak_config`);
+- the workflows `d1-joint-pipeline.yml` and `d1-final-eval.yml`;
+- `tools/wind/` (download + conversion of measured wind inside CI jobs) and
+  `tools/eval/summarize_final_eval.py`;
+- the method document `docs/D1_method.tex/.pdf`.
+
+Explicitly excluded for D1: trained checkpoints and deployed pairs (they exist only as
+GitHub Actions artifacts of the runs), measured wind data (Neural-Fly is not
+redistributable; SWUF-3D is fetched from Zenodo), and evaluation outputs.
+
+## Legacy pipeline (superseded, kept for provenance; see `docs/legacy_pipeline.md`)
+
 The public package contains only:
 
 - six configuration functions required by the active pipeline;

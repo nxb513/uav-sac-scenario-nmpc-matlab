@@ -1,20 +1,24 @@
 function run_d1_joint_pipeline()
-%RUN_D1_JOINT_PIPELINE One-seed joint pipeline (SAC tunes NMPC Q,R -> scenario-NMPC
-% teacher (M=5, N=20, Nc=5) + paired LQR -> streaming residual surrogate -> c_S / c_LQR
-% consolidation -> checkpoint). Method document: docs/D1_method.tex.
+%RUN_D1_JOINT_PIPELINE One-seed joint pipeline: SAC tunes the NMPC Q,R -> scenario-NMPC
+% teacher (M=5, N=20, Nc=5) with PRIVILEGED wind knowledge + paired LQR -> streaming
+% residual surrogate -> c_S / c_LQR consolidation -> checkpoint. Method document:
+% docs/D1_method.tex. The shared definitions (configuration, flight rules, teacher step,
+% surrogate history/feature, deployed blend) are the src/joint/d1_*.m functions, also used
+% by experiments/d1_final_eval.m, so training and evaluation cannot drift apart.
 %
 % Open-ended: runs SAC iterations until the wall-time quota (or D1_STOP_ITER), saving
 % a FULL checkpoint (SAC, surrogate, counters, pending iteration, RNG) that a later job
 % resumes, down to the case level. Milestone checkpoints every D1_CKPT_EVERY_ITER.
-% All training flights use the common flight rules (plant_step, teacher_step,
-% track_err) and the random training wind (sample_wind).
+% All training flights use the common flight rules (d1_plant_step, d1_case_len,
+% d1_teacher_step, d1_track_err) and the random training wind (d1_sample_wind).
 %
 % Env: D1_SEED, D1_RUN_DIR, D1_WALL_SECONDS, D1_RESUME ('1' to resume), D1_STOP_ITER,
 % D1_CKPT_EVERY_ITER, D1_WIND, D1_SOLVER, D1_RANDOM_QR, D1_LOGMULT_DEC, ...
+% Modes: D1_DIAG, D1_SURR_EVAL, D1_CONSOLIDATE, D1_COMPARE, D1_GATE_GRID.
 % FROZEN: Np=20, Nc=5, Ts=0.05, H=20, dU=0 (asserted; cfg.Qf is an unused flag, the
 % teacher terminal weight is the fixed Bryson Q0/M).
 
-cfg = joint_config();
+cfg = d1_config();
 fprintf('== D1 joint pipeline seed=%d wall=%ds run_dir=%s resume=%d ==\n', ...
     cfg.seed, cfg.wallSeconds, cfg.runDir, cfg.resume);
 assert(cfg.N==20 && cfg.Nc==5 && abs(cfg.Ts-0.05)<1e-12 && cfg.H==20, ...
@@ -28,53 +32,54 @@ rng(cfg.seed, 'twister');
 % Teacher-free modes (surrogate eval, consolidate, gate grid) never touch the
 % NMPC teacher, so they SKIP the acados build entirely -> those CI jobs need no
 % acados/CasADi toolchain.
-noTeacher = strcmp(getenv_str('D1_SURR_EVAL','0'),'1') || ...
-            strcmp(getenv_str('D1_CONSOLIDATE','0'),'1') || ...
-            strcmp(getenv_str('D1_GATE_GRID','0'),'1');
-scen = sample_scenarios(cfg);               % M=5 uncertain plant realizations
-lqr = build_lqr(cfg);                       % K, P (Bryson LQR + Riccati)
-cases = generate_teacher_dev_cases(cfg);    % ~120 cases, 1000-step references
+noTeacher = strcmp(d1_getenv_str('D1_SURR_EVAL','0'),'1') || ...
+            strcmp(d1_getenv_str('D1_CONSOLIDATE','0'),'1') || ...
+            strcmp(d1_getenv_str('D1_GATE_GRID','0'),'1');
+scen = d1_sample_scenarios(cfg);            % M=5 uncertain plant realizations (first rng draw)
+lqr = d1_build_lqr(cfg);                    % K, P (Bryson LQR + Riccati)
+cases = d1_train_cases(cfg);                % 120 cases, 1000-sample references
 if noTeacher
     teacher = [];
     fprintf('teacher SKIPPED (teacher-free mode) + LQR(P minEig=%.4g) + %d cases\n', ...
         min(eig(lqr.P)), numel(cases));
 else
     teacher = d1_teacher_build_solver(cfg, scen);
-    fprintf('built teacher(acados M=%d Nc=%d) + LQR(P minEig=%.4g) + %d cases\n', ...
+    fprintf('built teacher(acados M=%d Nc=%d, privileged wind) + LQR(P minEig=%.4g) + %d cases\n', ...
         cfg.M, cfg.Nc, min(eig(lqr.P)), numel(cases));
 end
 
 % ---- diagnostic mode: fly a few cases, dump trajectories, exit --------------
-if strcmp(getenv_str('D1_DIAG','0'), '1')
+if strcmp(d1_getenv_str('D1_DIAG','0'), '1')
     diag_flight(cfg, teacher, lqr, cases);
     return;
 end
 
 % ---- init or resume learners ------------------------------------------------
 ckptPath = fullfile(cfg.runDir, sprintf('checkpoint_seed%d.mat', cfg.seed));
-if strcmp(getenv_str('D1_SURR_EVAL','0'), '1')
+confPath = fullfile(cfg.runDir, sprintf('conf_seed%d.mat', cfg.seed));
+if strcmp(d1_getenv_str('D1_SURR_EVAL','0'), '1')
     assert(isfile(ckptPath), 'surrogate eval requires a checkpoint (set resume_run_id).');
-    S = load(ckptPath); sur = load_deployed(cfg, S); surrogate_eval(cfg, lqr, cases, sur); return;
+    S = load(ckptPath); sur = d1_load_deployed(S, confPath); surrogate_eval(cfg, lqr, cases, sur); return;
 end
-if strcmp(getenv_str('D1_CONSOLIDATE','0'), '1')
-    % Train c_S and c_LQR = P(next H steps contract | error state) over LQR + surrogate
-    % closed-loop rollouts; writes conf_seed<s>.mat (conf + consolidated surrogate).
+if strcmp(d1_getenv_str('D1_CONSOLIDATE','0'), '1')
+    % Train c_S and c_LQR over LQR / surrogate closed-loop rollouts; writes
+    % conf_seed<s>.mat (conf + consolidated surrogate = the deployed pair).
     assert(isfile(ckptPath), 'consolidate requires a checkpoint (set resume_run_id).');
-    S = load(ckptPath); consolidate_confidence(cfg, lqr, cases, S.sur, S.st, ckptPath); return;
+    S = load(ckptPath); consolidate_confidence(cfg, lqr, cases, S.sur, S.st); return;
 end
-if strcmp(getenv_str('D1_COMPARE','0'), '1')
+if strcmp(d1_getenv_str('D1_COMPARE','0'), '1')
     % Fly LQR-only / teacher-NMPC / pure surrogate / proposed(LQR+surrogate blend)
     % on one case per family, dump trajectories + tracking error for the figures.
     assert(isfile(ckptPath), 'compare requires a checkpoint (set resume_run_id).');
-    S = load(ckptPath); [sur, conf] = load_deployed(cfg, S);
+    S = load(ckptPath); [sur, conf] = d1_load_deployed(S, confPath);
     compare_flight(cfg, teacher, lqr, cases, sur, S.sac, conf); return;
 end
-if strcmp(getenv_str('D1_GATE_GRID','0'), '1')
+if strcmp(d1_getenv_str('D1_GATE_GRID','0'), '1')
     % Evaluate ONE (c_low,c_high) gate (from D1_C_LOW/D1_C_HIGH) on the validation
     % families: fly LQR + proposed blend (teacher-free) and report tracking RMSE.
     % The workflow matrix sweeps the grid -> collect GATE_RESULT lines.
     assert(isfile(ckptPath), 'gate_grid requires a consolidated checkpoint (set resume_run_id).');
-    S = load(ckptPath); [sur, conf] = load_deployed(cfg, S);
+    S = load(ckptPath); [sur, conf] = d1_load_deployed(S, confPath);
     gate_grid_flight(cfg, lqr, cases, sur, conf); return;
 end
 if cfg.resume && isfile(ckptPath)
@@ -111,8 +116,8 @@ while ~stopRun
         st.pend = struct('a', a, 'idx', idx, 'rewards', zeros(cfg.casesPerEval, 1), ...
             'cL', zeros(0,1), 'c', 1, 'dur', 0);
     end
-    [Q, R] = action_to_QR(st.pend.a, cfg);
-    set_teacher_weights(teacher, Q, R, cfg);
+    [Q, R] = d1_action_to_QR(st.pend.a, cfg);
+    d1_set_teacher_weights(teacher, Q, R, cfg);
     % --- remaining rollouts of this iteration (paired NMPC + LQR) ----------------
     while st.pend.c <= cfg.casesPerEval
         % Do not START a case predicted to overrun the wall budget (the CI step timeout
@@ -127,7 +132,7 @@ while ~stopRun
         st.pend.rewards(c) = rew; st.pend.cL = [st.pend.cL; cLdata];
         st.pend.c = c + 1; caseDur(end+1) = toc(tCase); st.pend.dur = st.pend.dur + caseDur(end); %#ok<AGROW>
         if toc(lastCkpt) > cfg.checkpointEverySec
-            save_checkpoint(ckptPath, sac, sur, st, cfg); lastCkpt = tic;
+            save_checkpoint(ckptPath, sac, sur, st); lastCkpt = tic;
         end
     end
     if stopRun, break; end
@@ -140,191 +145,28 @@ while ~stopRun
         fprintf('iter=%d reward=%.4f alpha=%.3g samples=%d elapsed=%.0fs iter_time=%.0fs\n', ...
             st.iter, reward, sac.alpha, st.totalSamples, toc(tStart), iterTime);
     end
-    save_checkpoint(ckptPath, sac, sur, st, cfg); lastCkpt = tic;
+    save_checkpoint(ckptPath, sac, sur, st); lastCkpt = tic;
     if cfg.ckptEvery > 0 && mod(st.iter, cfg.ckptEvery) == 0
         save_milestone(cfg, lqr, cases, sac, sur, st);
     end
 end
-save_checkpoint(ckptPath, sac, sur, st, cfg);        % main checkpoint FIRST (safe)
+save_checkpoint(ckptPath, sac, sur, st);             % main checkpoint FIRST (safe)
 fprintf('D1_JOINT_DONE iters=%d pending_case=%d samples=%d last_reward=%.4f\n', ...
     st.iter, pending_case(st), st.totalSamples, st.lastReward);
 % ---- phase B: train c_S (surrogate closed-loop alpha=1) + c_LQR (logistic) ---
 % Guarded so a failure never loses the SAC/surrogate/residual checkpoint.
 try
-    consolidate_confidence(cfg, lqr, cases, sur, st, ckptPath);
+    consolidate_confidence(cfg, lqr, cases, sur, st);
 catch ME
     fprintf('CONF_FAIL %s (main ckpt intact; re-run with D1_CONSOLIDATE=1)\n', ME.message);
 end
 end
 
 % ============================================================================
-function cfg = joint_config()
-cfg.seed = getenv_num('D1_SEED', 260914001);
-cfg.runDir = getenv_str('D1_RUN_DIR', fullfile('results','d1_joint', ...
-    sprintf('seed%d', getenv_num('D1_SEED',260914001))));
-cfg.wallSeconds = getenv_num('D1_WALL_SECONDS', 300);
-cfg.stopIter = getenv_num('D1_STOP_ITER', 0);        % stop exactly at this SAC iter (0 = off)
-cfg.resume = strcmp(getenv_str('D1_RESUME','0'),'1');
-cfg.Ts = 0.05; cfg.N = 20; cfg.Nc = 5; cfg.H = 20; cfg.Qf = 0; cfg.dU = 0;
-cfg.M = 5;                                          % robust scenarios (frozen)
-cfg.solverType = getenv_str('D1_SOLVER', 'SQP');     % 'SQP' (used by every run) | 'SQP_RTI'
-cfg.stepsPerCase = getenv_num('D1_STEPS', 1000);
-cfg.casesPerEval = getenv_num('D1_CASES_PER_EVAL', 20);
-cfg.plant = d1_joint_plant_params();
-cfg.actionDim = 6;                                  % Q:{pos,att,vel,rate}, R:{T,tau}
-% SAC Q,R search half-width in decades around the base (mult in 10^[-dec, +dec]).
-% Default 1.5 (0.03x..32x, wide). Smaller = SAC stays CLOSER to Bryson (e.g. 0.5 =
-% 0.32x..3.2x) -> teacher can't be pushed into an unsolvable corner.
-cfg.logMultDec = getenv_num('D1_LOGMULT_DEC', 1.5);
-cfg.logMultBounds = [10^(-cfg.logMultDec), 10^(cfg.logMultDec)];
-% Q,R base for the SAC-tuned teacher: 0 = Bryson warm-start (default), 1 = RANDOM
-% (no Bryson) log-uniform diag weights, deterministic per seed. Ablation: does the
-% Bryson warm-start matter? The LQR baseline stays Bryson in BOTH (fixed yardstick).
-cfg.randomQR = strcmp(getenv_str('D1_RANDOM_QR','0'),'1');
-cfg.rqrLog   = [-2, 2];                              % random base: 10^[-2,2] per weight
-% surrogate (2-head: residual Delta_u + confidence c_S)
-cfg.surHidden = 128; cfg.surLR = 1e-3; cfg.surBatch = 256;
-cfg.surBufferCap = 1e5; cfg.surRecentFrac = 0.5;
-cfg.resHalf = [cfg.plant.Tmax; 1; 1; 0.5];           % residual normalization scale
-% blend / confidence design params (fixed, disclosed)
-cfg.epsP   = getenv_num('D1_EPS_P',  0.5);           % c_S error scale (m): s=exp(-(RMS/epsP)^2)
-cfg.cLow   = getenv_num('D1_C_LOW',  0.3);           % g_L gate low threshold on c_LQR
-cfg.cHigh  = getenv_num('D1_C_HIGH', 0.7);           % g_L gate high threshold on c_LQR
-cfg.epsSafe= getenv_num('D1_EPS_SAFE', 0.1);         % Lyapunov safeguard margin (alpha_safe mode)
-cfg.alphaSafe = strcmp(getenv_str('D1_ALPHA_SAFE','0'),'1');
-cfg.lamU = 1; cfg.lamC = 1;                          % loss weights (on normalized targets)
-cfg.csCasesPerCall = getenv_num('D1_CS_CASES', 40);  % surrogate closed-loop cases for c_S labels
-cfg.csEpochs = getenv_num('D1_CS_EPOCHS', 300);
-% sac
-cfg.sacLR = 3e-4; cfg.sacBatch = 256; cfg.sacBufferCap = 5e4;
-cfg.sacGamma = 0.0;                                  % 1-step bandit (done each ep)
-cfg.sacTau = 0.005; cfg.sacTargetEntropy = -cfg.actionDim;
-cfg.logEvery = 1; cfg.checkpointEverySec = 120;
-% frozen milestone checkpoints (+ their own confidences) every N SAC iterations; 0 = off
-cfg.ckptEvery = getenv_num('D1_CKPT_EVERY_ITER', 50);
-% training wind (random, synthetic; NO measured wind data is used): see sample_wind
-cfg.windOn   = strcmp(getenv_str('D1_WIND','1'),'1');
-cfg.windMin  = getenv_num('D1_WIND_MIN', 1);         % mean wind speed range [m/s]
-cfg.windMax  = getenv_num('D1_WIND_MAX', 10);
-cfg.windDrag = [0.425; 0.256; 0];                    % mass-normalized rotor drag [1/s], Faessler et al. RA-L 2018
-end
-
-function v = getenv_num(name, dflt)
-s = getenv(name); if isempty(s), v = dflt; else, v = str2double(s); end
-end
-function v = getenv_str(name, dflt)
-s = getenv(name); if isempty(s), v = dflt; else, v = s; end
-end
-
-% ---- LQR (Bryson) -----------------------------------------------------------
-function lqr = build_lqr(cfg)
-P = cfg.plant; theta = P.nominal;
-xh = zeros(12,1); uh = [P.m*P.g; 0; 0; 0];
-[A, B] = num_linearize(@(x,u) quad_dynamics(0, x, u, theta, []), xh, uh);
-sysd = c2d(ss(A, B, eye(12), zeros(12,4)), cfg.Ts);
-[Q0, R0] = d1_bryson_weights(P);
-[K, Sr] = dlqr(sysd.A, sysd.B, Q0, R0);
-lqr.K = K; lqr.P = Sr; lqr.uh = uh; lqr.Ad = sysd.A; lqr.Bd = sysd.B;
-lqr.Q = Q0; lqr.R = R0;                               % for alpha_bar (Prop 1)
-end
-
-function [A, B] = num_linearize(f, x0, u0)
-n = numel(x0); m = numel(u0); h = 1e-6;
-A = zeros(n); B = zeros(n, m);
-for i = 1:n
-    dx = zeros(n,1); dx(i) = h;
-    A(:,i) = (f(x0+dx,u0) - f(x0-dx,u0)) / (2*h);
-end
-for j = 1:m
-    du = zeros(m,1); du(j) = h;
-    B(:,j) = (f(x0,u0+du) - f(x0,u0-du)) / (2*h);
-end
-end
-
-% ---- cases ------------------------------------------------------------------
-function cases = generate_teacher_dev_cases(cfg)
-ref = targeted_lqr_weak_config().reference;
-theta = cfg.plant.nominal;
-families = ref.families; speeds = ref.approvedIdSpeedAnchors;
-accels = ref.approvedAccelerationTargets;
-cases = struct('Xref',{},'Uref',{},'groupId',{});
-count = 0; target = 120;
-% deterministic stratified sweep family x accel x speed until ~120
-for fi = 1:numel(families)
-  for ai = 1:numel(accels)
-    for si = 1:numel(speeds)
-      if count >= target, break; end
-      gid = sprintf('%s|v%g|a%g', families{fi}, speeds(si), accels(ai));
-      rng(d1_case_seed(gid), 'twister');
-      try
-        opt = quad_sample_targeted_reference_options(families{fi}, ref, ...
-            speeds(si), accels(ai));
-        [Xref,~,Uref] = quad_targeted_reference_trajectory(families{fi}, ...
-            cfg.Ts, cfg.stepsPerCase, opt, theta);
-        if all(isfinite(Xref(:)))
-          count = count + 1;
-          cases(count).Xref = Xref; cases(count).Uref = Uref;
-          cases(count).groupId = gid;
-        end
-      catch
-      end
-    end
-  end
-end
-assert(count > 0, 'No teacher-dev cases generated.');
-end
-
-% ---- action -> Q,R ----------------------------------------------------------
-function [Q, R] = action_to_QR(a, cfg)
-[Q0, R0] = qr_base(cfg);                            % Bryson, or random (no-Bryson)
-lo = log(cfg.logMultBounds(1)); hi = log(cfg.logMultBounds(2));
-mult = exp(lo + 0.5*(a(:)+1)*(hi-lo));              % 6 log-multipliers
-q = diag(Q0);
-q(1:3)=q(1:3)*mult(1); q(4:6)=q(4:6)*mult(2);
-q(7:9)=q(7:9)*mult(3); q(10:12)=q(10:12)*mult(4);
-r = diag(R0); r(1)=r(1)*mult(5); r(2:4)=r(2:4)*mult(6);
-Q = diag(q); R = diag(r);
-end
-
-function [Q0, R0] = qr_base(cfg)
-% Base Q,R for the SAC-tuned teacher. Default = Bryson (1/e_allow^2, 1/du_allow^2).
-% D1_RANDOM_QR=1 -> random diagonal weights, log-uniform 10^cfg.rqrLog per element,
-% deterministic per seed (ablation vs Bryson warm-start). NOTE: only the TEACHER
-% base changes; build_lqr keeps Bryson so the LQR yardstick is identical across both.
-if cfg.randomQR
-    rs = RandStream('twister', 'Seed', cfg.seed + 90210);   % independent of global rng
-    lo = cfg.rqrLog(1); span = cfg.rqrLog(2) - cfg.rqrLog(1);
-    Q0 = diag(10.^(lo + span*rand(rs,12,1)));
-    R0 = diag(10.^(lo + span*rand(rs,4,1)));
-else
-    [Q0, R0] = d1_bryson_weights(cfg.plant);
-end
-end
-
-function scen = sample_scenarios(cfg)
-% M uncertain plant realizations; scenario 1 = nominal, rest perturbed by +/-rho
-% (step1_plant_config train uncertainty). Deterministic given the seed rng.
-nom = cfg.plant.nominal;
-rho = step1_plant_config().uncertainty.train.rho;   % 14x1
-Jnom = diag(nom.J);
-scen = struct('m',{},'Jd',{},'Dv',{},'Domega',{},'alphaT',{},'alphaTau',{});
-for i = 1:cfg.M
-    if i==1, xi = zeros(14,1); else, xi = 2*rand(14,1)-1; end
-    f = 1 + xi.*rho;
-    scen(i).m = nom.m*f(1);
-    scen(i).Jd = Jnom.*f(2:4);
-    scen(i).Dv = nom.Dv(:).*f(5:7);
-    scen(i).Domega = nom.Domega(:).*f(8:10);
-    scen(i).alphaT = nom.alphaT*f(11);
-    scen(i).alphaTau = nom.alphaTau(:).*f(12:14);
-end
-end
-
 function theta = perturb_plant(nom, scale, seed)
-% Off-nominal FLIGHT plant for the robustness test: nominal parameters scaled by
-% (1 + scale*xi.*rho), xi deterministic from seed, rho = step1 train uncertainty
-% (14x1). scale<=0 returns the nominal plant unchanged. Returns a struct in the
-% same format quad_dynamics expects (m,g,J matrix,Dv,Domega,alphaT,alphaTau).
+% Off-nominal FLIGHT plant for the diagnostic robustness test: nominal parameters scaled
+% by (1 + scale*xi.*rho), xi deterministic from seed, rho = step1 train uncertainty
+% (14x1). scale<=0 returns the nominal plant unchanged.
 theta = nom;
 if scale <= 0, return; end
 rho = step1_plant_config().uncertainty.train.rho;   % 14x1
@@ -339,169 +181,54 @@ theta.alphaT   = nom.alphaT * f(11);
 theta.alphaTau = nom.alphaTau(:) .* f(12:14);
 end
 
-function set_teacher_weights(solver, Q, R, cfg)
-Wblk = repmat({Q/cfg.M}, 1, cfg.M); Wblk{end+1} = R;
-W = blkdiag(Wblk{:});                                 % (M*12+4) x (M*12+4)
-for s = 0:cfg.N-1, solver.set('cost_W', W, s); end
-% terminal weight kept at build-time (Qf=0; terminal retune not critical).
-end
-
-function warmstart_ref(teacher, Xref, k, uh, cfg)
-% seed the SQP initial guess along the reference (helps convergence on fast refs)
-M = cfg.M; N = cfg.N; nc = size(Xref,2);
-for j = 0:N
-    teacher.set('init_x', [repmat(Xref(:,min(k+j,nc)),M,1); uh], j);
-end
-for j = 0:N-1
-    teacher.set('init_u', zeros(4,1), j);
-end
-end
-
-function teacher_reset(teacher, Xref, k, uh, cfg)
-% Clear ALL solver memory (iterates, multipliers, QP warm start) and re-seed the
-% initial guess along the reference. The acados solver object is reused for the whole
-% process; without this, one failed solve left corrupted multipliers that made every
-% later solve fail (the former reward -10 "collapse" that only a restart cured).
-teacher.reset();
-warmstart_ref(teacher, Xref, k, uh, cfg);
-end
-
-function [u, status, usable] = teacher_step(teacher, x, uprev, Xref, k, uh, cfg)
-% One teacher NMPC step. The SQP iterate is applied when the solver converged
-% (status 0) or hit its iteration cap (status 2) with a finite iterate; otherwise the
-% last control is held and the solver is reset before the next step.
-N = cfg.N; M = cfg.M;
-for s = 0:N-1
-    teacher.set('cost_y_ref', [repmat(Xref(:,k+s),M,1); uh], s);
-end
-teacher.set('cost_y_ref_e', repmat(Xref(:,k+N),M,1));
-teacher.set('constr_x0', [repmat(x,M,1); uprev]);
-teacher.solve();
-status = teacher.get('status'); du0 = teacher.get('u', 0);
-usable = any(status == [0 2]) && all(isfinite(du0));
-if usable
-    u = uprev + du0;
-else
-    u = uprev;
-    teacher_reset(teacher, Xref, min(k+1, size(Xref,2)-N), uh, cfg);
-end
-end
-
-% ---- common flight rules (training, consolidation, diagnostics, final evaluation) ----
-function [x, div] = plant_step(t, x, u, Ts, theta, ds)
-% One RK4 plant step at real time t. Divergence = integration error (e.g. singular
-% ZYX Euler rates at pitch = +-90 deg), a non-finite state, or |p| > 1e4 m. A diverged
-% flight is NOT stopped: the caller charges the step, restarts the plant on the
-% reference, resets its controller's internal state and keeps flying to the end.
-try
-    x = quad_step_rk4(t, x, u, Ts, theta, ds);
-catch
-    x = nan(12,1);
-end
-div = ~all(isfinite(x)) || norm(x(1:3)) > 1e4;
-end
-
-function e = track_err(X, Xr)
-% Per-step position tracking error ||p_k - p_ref,k+1||, capped at 5 m; a diverged step
-% (stored as a NaN state) counts as the cap. Same definition as the training reward.
-e = vecnorm(X(1:3,:) - Xr(1:3,:));
-e(~isfinite(e)) = 5; e = min(e, 5);
-end
-
-% ---- training wind (random, synthetic) ---------------------------------------
-function ds = sample_wind(cfg, T)
-% One random wind realization for a rollout of T steps (no measured wind data used).
-%  mean   : U ~ Uniform[windMin, windMax] m/s, horizontal, azimuth ~ Uniform[0, 2*pi)
-%  gusts  : Dryden low-altitude turbulence (MIL-HDBK-1797) at the reference height
-%           h = 20 ft: sigma_w = 0.1 U, sigma_u = sigma_v = sigma_w/(0.177+0.000823h)^0.4,
-%           L_u = L_v = h/(0.177+0.000823h)^1.2, L_w = h; each component a first-order
-%           Gauss-Markov process with time constant L/U (turbulence advected by U)
-%  force  : linear rotor drag, mass-normalized (Faessler et al., RA-L 2018, identified on
-%           a 0.61 kg quadrotor): F = m R diag(windDrag) R' w, world frame
-U = cfg.windMin + (cfg.windMax - cfg.windMin)*rand;
-psi = 2*pi*rand;
-hft = 20; a = 0.177 + 0.000823*hft; ft = 0.3048;
-sw = 0.1*U; su = sw/a^0.4;
-Lu = hft/a^1.2*ft; Lw = hft*ft;
-tau = [Lu, Lu, Lw]/U; sg = [su, su, sw];
-dt = cfg.Ts/2; n = 2*T + 5; tt = (0:n-1)*dt;
-g = zeros(3, n);
-for i = 1:3
-    ph = exp(-dt/tau(i)); q = sg(i)*sqrt(1 - ph^2);
-    g(i,1) = sg(i)*randn;
-    for j = 2:n, g(i,j) = ph*g(i,j-1) + q*randn; end
-end
-c = cos(psi); s = sin(psi);
-W = [c*(U + g(1,:)) - s*g(2,:); s*(U + g(1,:)) + c*g(2,:); g(3,:)];   % (u,v,w) -> world
-Gi = {griddedInterpolant(tt, W(1,:), 'linear', 'nearest'), ...
-      griddedInterpolant(tt, W(2,:), 'linear', 'nearest'), ...
-      griddedInterpolant(tt, W(3,:), 'linear', 'nearest')};
-D = diag(cfg.windDrag); m = cfg.plant.m;
-ds = @(t, x, u, th) wind_force(t, x, Gi, D, m);
-end
-
-function d = wind_force(t, x, Gi, D, m)
-w = [Gi{1}(t); Gi{2}(t); Gi{3}(t)];
-R = quad_rotm_zyx(x(4:6));
-d = struct('force', m*(R*D*R.')*w, 'torque', zeros(3,1));
-end
-
 % ---- paired NMPC + LQR rollout on one case ---------------------------------
 function [reward, sur, cLdata, st] = paired_rollout(teacher, lqr, kase, sur, st, cfg)
-Ts = cfg.Ts; N = cfg.N; theta = cfg.plant.nominal;
-Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
-uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
-
-% independent plant copies, same initial condition
-xN = Xref(:,1); xL = Xref(:,1); uprev = uh;
-stateHist = repmat(xN,1,4); inputHist = repmat(uh,1,4);
-posErrN = zeros(T,1); duAcc = 0; okN = 0; cViol = 0; prevU = uh;
-tCase = tic; nSt = [0 0 0];                          % teacher status counts: conv / max-iter / failed
+% Teacher copy and LQR copy of the nominal plant fly the same reference in the same wind
+% realization. The teacher is told the current wind force (privileged); the residual
+% label Du* = u_teacher - sat(u_LQR) at the teacher state is streamed with the history
+% feature the deployed surrogate sees (no wind information), usable solves only.
+Ts = cfg.Ts; theta = cfg.plant.nominal; uh = cfg.uh;
+Xref = kase.Xref; T = d1_case_len(Xref, cfg);
+xN = Xref(:,1); xL = Xref(:,1); uprev = uh; h = d1_hist_init(xN, cfg);
+posErrN = zeros(T,1); duAcc = 0; cViol = 0; prevU = uh;
+tCase = tic; nSt = [0 0 0];                          % teacher steps: converged / max-iter / unusable
 nDivN = 0; nDivL = 0;                                % divergence restarts (teacher copy / LQR copy)
 EL = zeros(12, T+1); EL(:,1) = xL - Xref(:,1);       % LQR error traj for c_L
-usat_lo = [0;-0.5;-0.5;-0.25]; usat_hi = [cfg.plant.Tmax;0.5;0.5;0.25];
-teacher_reset(teacher, Xref, 1, uh, cfg);            % clean solver memory for EVERY case
-if cfg.windOn, ds = sample_wind(cfg, T); else, ds = []; end   % same wind for NMPC + LQR copies
+d1_teacher_reset(teacher, Xref, 1, cfg);             % clean solver memory for EVERY case
+if cfg.windOn, ds = d1_sample_wind(cfg, T); else, ds = []; end   % same wind for both copies
 
 for k = 1:T
-    % ---- NMPC teacher branch (augmented M-scenario state, delta-u) ----------
-    [uN, status, usable] = teacher_step(teacher, xN, uprev, Xref, k, uh, cfg);
-    okStatus = (status == 0);                        % true SQP convergence (diagnostic)
-    uN = min(max(uN, usat_lo), usat_hi);
-    okN = okN + okStatus; uprev = uN;
+    t = (k-1)*Ts;
+    % ---- NMPC teacher branch (privileged current wind force) ------------------
+    F = d1_wind_now(ds, t, xN, uprev, theta);
+    [uN, status, usable] = d1_teacher_step(teacher, xN, uprev, Xref, k, F, cfg);
+    uN = d1_sat(uN, cfg); uprev = uN;
     nSt = nSt + [status == 0, status == 2, ~usable];
-    % stream RESIDUAL label Delta_u* = u_teacher - u_LQR(same state xN); genuine NMPC only
-    if usable && all(isfinite(stateHist(:))) && all(isfinite(inputHist(:)))
-        refLook = Xref(:, k:k+10);
-        feat = surrogate_build_feature(stateHist, inputHist, refLook, zeros(12,1));
+    if usable
+        feat = d1_hist_feature(h, Xref(:, k:k+10));
         if all(isfinite(feat))
-            uLk = uh - lqr.K*(xN - Xref(:,k));
-            uLk = min(max(uLk, usat_lo), usat_hi);
+            uLk = d1_sat(uh - lqr.K*(xN - Xref(:,k)), cfg);
             sur = surrogate_stream_update(sur, feat, uN - uLk, st.teacherVersion, cfg);
             st.totalSamples = st.totalSamples + 1;
         end
     end
-    % advance NMPC plant + histories (real time so the time-varying wind acts)
-    [xNnext, divN] = plant_step((k-1)*Ts, xN, uN, Ts, theta, ds);
-    stateHist = [stateHist(:,2:end), xN];
-    inputHist = [inputHist(:,2:end), uN];
-    duAcc = duAcc + sum((uN-prevU).^2); prevU = uN; xN = xNnext;
+    [xNnext, divN] = d1_plant_step(t, xN, uN, Ts, theta, ds);
+    duAcc = duAcc + sum((uN-prevU).^2); prevU = uN;
     if divN
         % diverged: charge this step the capped error + an attitude violation, then
-        % restart this plant copy ON the reference (histories, actuator state and solver
+        % restart this plant copy ON the reference (history, actuator state and solver
         % reset) so the case always runs its full length
         nDivN = nDivN + 1; posErrN(k) = 5; cViol = cViol + 1;
-        xN = Xref(:,k+1); uprev = uh; prevU = uh;
-        stateHist = repmat(xN,1,4); inputHist = repmat(uh,1,4);
-        teacher_reset(teacher, Xref, k+1, uh, cfg);
+        xN = Xref(:,k+1); uprev = uh; prevU = uh; h = d1_hist_init(xN, cfg);
+        d1_teacher_reset(teacher, Xref, k+1, cfg);
     else
+        h = d1_hist_push(h, uN, xNnext, cfg); xN = xNnext;
         posErrN(k) = norm(xN(1:3) - Xref(1:3,k+1));
         cViol = cViol + any(abs(xN(4:5)) > 1.35);
     end
     % ---- LQR paired branch (own plant copy) --------------------------------
-    uL = uh - lqr.K*(xL - Xref(:,k));
-    uL = min(max(uL,[0;-0.5;-0.5;-0.25]),[cfg.plant.Tmax;0.5;0.5;0.25]);
-    [xL, divL] = plant_step((k-1)*Ts, xL, uL, Ts, theta, ds);
+    uL = d1_sat(uh - lqr.K*(xL - Xref(:,k)), cfg);
+    [xL, divL] = d1_plant_step(t, xL, uL, Ts, theta, ds);
     if divL
         nDivL = nDivL + 1; EL(:,k+1) = NaN;          % NaN breaks every contraction window across it
         xL = Xref(:,k+1);                            % restart the LQR copy on the reference
@@ -509,14 +236,13 @@ for k = 1:T
         EL(:,k+1) = xL - Xref(:,k+1);
     end
 end
-% reward from NMPC KPIs over the FULL case (negative cost; lower error/failure =
-% higher reward). posErr capped at 5 m/step; a divergence step is charged the cap and
-% the copy restarts on the reference, so there is no separate divergence term.
-nOk = T; kdone = T;
-pe = min(posErrN(1:nOk), 5);
+% reward from the teacher's KPIs over the FULL case (negative cost). posErr capped at
+% 5 m/step; a divergence step is charged the cap and the copy restarts on the reference.
+% failRate = share of UNUSABLE solves (same definition as the apply / label rule).
+pe = min(posErrN, 5);
 posRmse = sqrt(mean(pe.^2));
-failRate = 1 - okN/nOk;
-reward = -(posRmse + 0.01*sqrt(duAcc/nOk) + 0.5*(cViol/nOk) + 5*failRate);
+failRate = nSt(3)/T;
+reward = -(posRmse + 0.01*sqrt(duAcc/T) + 0.5*(cViol/T) + 5*failRate);
 % c_L contraction data from LQR error trajectory
 try
     outL = d1_finite_horizon_contraction(EL, lqr.P, cfg.H, struct());
@@ -525,8 +251,8 @@ catch
     cLdata = [];
 end
 if isempty(cLdata), cLdata = zeros(0,1); end
-fprintf('  CASE %-26s steps=%4d conv=%.2f maxit=%.2f fail=%.2f restarts NMPC=%d LQR=%d t=%.0fs\n', ...
-    kase.groupId, kdone, nSt/max(kdone,1), nDivN, nDivL, toc(tCase));
+fprintf('  CASE %-26s steps=%4d conv=%.2f maxit=%.2f unusable=%.2f restarts NMPC=%d LQR=%d t=%.0fs\n', ...
+    kase.groupId, T, nSt/T, nDivN, nDivL, toc(tCase));
 end
 
 % ---- surrogate (2-head: residual Delta_u + confidence c_S) ------------------
@@ -549,7 +275,7 @@ function sur = init_surrogate(cfg)
 sur.net = build_two_head_net(cfg);
 sur.avgG = []; sur.avgSqG = []; sur.step = 0;      % adam state (du/trunk in phase A)
 sur.avgC = []; sur.avgSqC = []; sur.stepC = 0;     % adam state (cs head in phase B)
-sur.featScale = feature_scale();
+sur.featScale = d1_feature_scale(cfg);
 sur.resHalf = cfg.resHalf;                          % residual normalization
 % Delta_u residual buffer (phase A, teacher-driven)
 sur.buf.feat = zeros(208, cfg.surBufferCap, 'single');
@@ -558,15 +284,8 @@ sur.buf.ver  = zeros(1,  cfg.surBufferCap);
 sur.buf.n = 0; sur.buf.pos = 0; sur.cap = cfg.surBufferCap;
 end
 
-function s = feature_scale()
-ss = max(abs([-100;-100;-10;-1.35;-1.35;-pi;-25;-25;-25;-10;-10;-10]), ...
-         abs([100;100;100;1.35;1.35;pi;25;25;25;10;10;10]));
-us = [40;1;1;0.5];
-s = [repmat(ss,4,1); repmat(us,4,1); repmat(ss,11,1); ss];  % 48+16+132+12=208
-end
-
 function sur = surrogate_stream_update(sur, feat, duResidual, ver, cfg)
-% Stream a RESIDUAL label Delta_u* = u_teacher - u_LQR(same state) to the du head.
+% Stream a RESIDUAL label Delta_u* = u_teacher - sat(u_LQR) (same state) to the du head.
 sur.buf.pos = mod(sur.buf.pos, sur.cap) + 1;
 tgt = duResidual ./ sur.resHalf;                     % normalize residual
 sur.buf.feat(:,sur.buf.pos) = single(feat ./ sur.featScale);
@@ -584,18 +303,6 @@ end
 sur.step = sur.step + 1;
 [sur.net, sur.avgG, sur.avgSqG] = adamupdate(sur.net, grad, ...
     sur.avgG, sur.avgSqG, sur.step, cfg.surLR);
-end
-
-function du = surrogate_predict_du(sur, feat)
-% predicted residual Delta_u (physical units) from a raw feature vector
-z = single(feat) ./ sur.featScale;
-p = predict(sur.net, dlarray(z,'CB'), 'Outputs', 'du');
-du = double(extractdata(p(:))) .* sur.resHalf;
-end
-function c = surrogate_predict_cs(sur, feat)
-z = single(feat) ./ sur.featScale;
-p = predict(sur.net, dlarray(z,'CB'), 'Outputs', 'cs');
-c = double(extractdata(p(1)));
 end
 
 function idx = sample_recent(buf, ver, cfg)
@@ -684,7 +391,7 @@ sac.step = sac.step + 1;
 [sac.q1, sac.avg1, sac.avgSq1] = adamupdate(sac.q1, g1, sac.avg1, sac.avgSq1, sac.step, cfg.sacLR);
 [sac.q2, sac.avg2, sac.avgSq2] = adamupdate(sac.q2, g2, sac.avg2, sac.avgSq2, sac.step, cfg.sacLR);
 % actor + alpha update (state-independent squashed Gaussian)
-[gmu, gstd, gAl, entropy] = dlfeval(@actor_loss, sac.mu, sac.logStd, ...
+[gmu, gstd, gAl] = dlfeval(@actor_loss, sac.mu, sac.logStd, ...
     sac.logAlpha, sac.q1, sac.q2, cfg.actionDim, cfg.sacTargetEntropy);
 [sac.mu, sac.avgA, sac.avgSqA] = adamupdate(sac.mu, gmu, sac.avgA, sac.avgSqA, sac.step, cfg.sacLR);
 [sac.logStd, sac.aStd, sac.aSqStd] = adamupdate(sac.logStd, gstd, sac.aStd, sac.aSqStd, sac.step, cfg.sacLR);
@@ -718,32 +425,11 @@ gAl = dlgradient(alphaLoss, logAlpha);
 ent = -logp;
 end
 
-function tnet = soft_update(tnet, net, tau)
-tl = tnet.Learnables; nl = net.Learnables;
-for i = 1:height(tl)
-    tl.Value{i} = (1-tau)*tl.Value{i} + tau*nl.Value{i};
-end
-tnet.Learnables = tl;
-end
-
 % ---- checkpoint -------------------------------------------------------------
-function save_checkpoint(path, sac, sur, st, cfg) %#ok<INUSD>
-rngState = rng; %#ok<NASGU>
+function save_checkpoint(path, sac, sur, st)
+rngState = rng;
 save(path, 'sac', 'sur', 'st', 'rngState', '-v7.3');
 fprintf('CHECKPOINT saved iter=%d samples=%d -> %s\n', st.iter, st.totalSamples, path);
-end
-
-function [sur, conf] = load_deployed(cfg, S)
-% Deployed controller = consolidated surrogate + conf from conf_seed<s>.mat (written by
-% consolidate_confidence). Missing conf file -> training surrogate, no c_LQR (g_L = 1).
-f = fullfile(cfg.runDir, sprintf('conf_seed%d.mat', cfg.seed));
-sur = S.sur; conf = [];
-if isfile(f)
-    C = load(f); conf = C.conf;
-    if isfield(C, 'sur'), sur = C.sur; end
-else
-    fprintf('WARN no %s: using the training surrogate without consolidated c_S / c_LQR\n', f);
-end
 end
 
 function c = pending_case(st)
@@ -753,14 +439,14 @@ end
 
 function save_milestone(cfg, lqr, cases, sac, sur, st)
 % Frozen copy at an exact SAC iteration (checkpoint_seed<s>_iter<NNNN>.mat) plus its
-% own confidences (conf_seed<s>_iter<NNNN>.mat). Consolidation runs on a COPY of the
+% own deployed pair (conf_seed<s>_iter<NNNN>.mat). Consolidation runs on a COPY of the
 % surrogate and the training RNG stream is restored, so training is unaffected.
 tag = sprintf('seed%d_iter%04d', cfg.seed, st.iter);
 p = fullfile(cfg.runDir, ['checkpoint_' tag '.mat']);
-save_checkpoint(p, sac, sur, st, cfg);
+save_checkpoint(p, sac, sur, st);
 r0 = rng;
 try
-    consolidate_confidence(cfg, lqr, cases, sur, st, p, ['conf_' tag '.mat']);
+    consolidate_confidence(cfg, lqr, cases, sur, st, ['conf_' tag '.mat']);
 catch ME
     fprintf('MILESTONE_CONF_FAIL iter=%d %s\n', st.iter, ME.message);
 end
@@ -771,7 +457,7 @@ end
 % ---- diagnostics ------------------------------------------------------------
 function diag_flight(cfg, teacher, lqr, cases)
 [Q0, R0] = d1_bryson_weights(cfg.plant);
-set_teacher_weights(teacher, Q0, R0, cfg);
+d1_set_teacher_weights(teacher, Q0, R0, cfg);
 sel = unique(round(linspace(1, numel(cases), min(4, numel(cases)))));
 D = struct('groupId',{},'Xref',{},'xN',{},'xL',{},'ok',{},'restarts',{});
 for ci = 1:numel(sel)
@@ -779,7 +465,7 @@ for ci = 1:numel(sel)
     [Xr, xN, xL, okv, nDiv] = fly_case(teacher, lqr, kase, cfg);
     D(ci).groupId = kase.groupId; D(ci).Xref = Xr;
     D(ci).xN = xN; D(ci).xL = xL; D(ci).ok = okv; D(ci).restarts = nDiv;
-    peN = track_err(xN, Xr); peL = track_err(xL, Xr);
+    peN = d1_track_err(xN, Xr); peL = d1_track_err(xL, Xr);
     fprintf(['DIAG %s: NMPC posErr med=%.2f max=%.2f okRate=%.2f restarts=%d | ' ...
         'LQR posErr med=%.2f max=%.2f restarts=%d\n'], kase.groupId, median(peN), max(peN), ...
         mean(okv), nDiv(1), median(peL), max(peL), nDiv(2));
@@ -790,25 +476,24 @@ fprintf('DIAG_DONE saved %d cases\n', numel(D));
 end
 
 function [Xr, xNt, xLt, okv, nDiv] = fly_case(teacher, lqr, kase, cfg)
-% Teacher (Bryson weights set by the caller) and LQR on the nominal plant with one
-% training-wind realization, full length, common divergence/restart rule.
-Ts = cfg.Ts; N = cfg.N; theta = cfg.plant.nominal;
-Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
-uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
-lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+% Teacher (Bryson weights set by the caller, privileged wind) and LQR on the nominal
+% plant with one training-wind realization, full length, common divergence/restart rule.
+Ts = cfg.Ts; theta = cfg.plant.nominal; uh = cfg.uh;
+Xref = kase.Xref; T = d1_case_len(Xref, cfg);
 Xr = Xref(:, 2:T+1);                                 % state after step k vs ref k+1
 xNt = nan(12, T); xLt = nan(12, T); okv = zeros(1, T); nDiv = [0 0];
-if cfg.windOn, ds = sample_wind(cfg, T); else, ds = []; end
+if cfg.windOn, ds = d1_sample_wind(cfg, T); else, ds = []; end
 % NMPC teacher branch
 xN = Xref(:,1); uprev = uh;
-teacher_reset(teacher, Xref, 1, uh, cfg);
+d1_teacher_reset(teacher, Xref, 1, cfg);
 for k = 1:T
-    [uN, status] = teacher_step(teacher, xN, uprev, Xref, k, uh, cfg);
-    uN = min(max(uN, lo), hi); uprev = uN; okv(k) = (status == 0);
-    [xN, div] = plant_step((k-1)*Ts, xN, uN, Ts, theta, ds);
+    t = (k-1)*Ts; F = d1_wind_now(ds, t, xN, uprev, theta);
+    [uN, status] = d1_teacher_step(teacher, xN, uprev, Xref, k, F, cfg);
+    uN = d1_sat(uN, cfg); uprev = uN; okv(k) = (status == 0);
+    [xN, div] = d1_plant_step(t, xN, uN, Ts, theta, ds);
     if div
         nDiv(1) = nDiv(1) + 1; xN = Xref(:,k+1); uprev = uh;
-        teacher_reset(teacher, Xref, k+1, uh, cfg);
+        d1_teacher_reset(teacher, Xref, k+1, cfg);
     else
         xNt(:,k) = xN;
     end
@@ -816,44 +501,39 @@ end
 % LQR branch (same wind realization)
 xL = Xref(:,1);
 for k = 1:T
-    uL = uh - lqr.K*(xL - Xref(:,k)); uL = min(max(uL, lo), hi);
-    [xL, div] = plant_step((k-1)*Ts, xL, uL, Ts, theta, ds);
+    uL = d1_sat(uh - lqr.K*(xL - Xref(:,k)), cfg);
+    [xL, div] = d1_plant_step((k-1)*Ts, xL, uL, Ts, theta, ds);
     if div, nDiv(2) = nDiv(2) + 1; xL = Xref(:,k+1); else, xLt(:,k) = xL; end
 end
 end
 
 function surrogate_eval(cfg, lqr, cases, sur)
-% Fly the surrogate at alpha=1 (u = sat(u_LQR + Delta_u_hat)); report tracking +
+% Fly the surrogate at alpha=1 (u = sat(sat(u_LQR) + Delta_u_hat)); report tracking +
 % mean predicted c_S per case.
-Ts = cfg.Ts; theta = cfg.plant.nominal;
-uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
-lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+Ts = cfg.Ts; theta = cfg.plant.nominal; uh = cfg.uh;
 sel = unique(round(linspace(1, numel(cases), min(6, numel(cases)))));
 D = struct('groupId',{},'Xref',{},'xS',{},'posErr',{},'meanCS',{},'restarts',{});
 for ci = 1:numel(sel)
-    kase = cases(sel(ci)); Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-11);
-    xS = Xref(:,1); stateHist = repmat(xS,1,4); inputHist = repmat(uh,1,4);
+    kase = cases(sel(ci)); Xref = kase.Xref; T = d1_case_len(Xref, cfg);
+    xS = Xref(:,1); h = d1_hist_init(xS, cfg);
     xSt = nan(12,T); csAll = nan(1,T); nDiv = 0;
-    if cfg.windOn, ds = sample_wind(cfg, T); else, ds = []; end
+    if cfg.windOn, ds = d1_sample_wind(cfg, T); else, ds = []; end
     for k = 1:T
-        feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
-        uLk = uh - lqr.K*(xS - Xref(:,k));
+        feat = d1_hist_feature(h, Xref(:,k:k+10));
         du = zeros(4,1);
         if all(isfinite(feat))
-            du = surrogate_predict_du(sur, feat); csAll(k) = surrogate_predict_cs(sur, feat);
+            du = d1_sur_predict_du(sur, feat); csAll(k) = d1_sur_predict_cs(sur, feat);
             if ~all(isfinite(du)), du = zeros(4,1); end
         end
-        u = min(max(uLk + du, lo), hi);
-        stateHist = [stateHist(:,2:end), xS]; inputHist = [inputHist(:,2:end), u];
-        [xS, div] = plant_step((k-1)*Ts, xS, u, Ts, theta, ds);
+        u = d1_sat(d1_sat(uh - lqr.K*(xS - Xref(:,k)), cfg) + du, cfg);
+        [xNew, div] = d1_plant_step((k-1)*Ts, xS, u, Ts, theta, ds);
         if div
-            nDiv = nDiv + 1; xS = Xref(:,k+1);
-            stateHist = repmat(xS,1,4); inputHist = repmat(uh,1,4);
+            nDiv = nDiv + 1; xS = Xref(:,k+1); h = d1_hist_init(xS, cfg);
         else
-            xSt(:,k) = xS;
+            h = d1_hist_push(h, u, xNew, cfg); xS = xNew; xSt(:,k) = xS;
         end
     end
-    pe = track_err(xSt, Xref(:,2:T+1));
+    pe = d1_track_err(xSt, Xref(:,2:T+1));
     mcs = mean(csAll(isfinite(csAll)));
     D(ci).groupId = kase.groupId; D(ci).Xref = Xref(:,2:T+1); D(ci).xS = xSt;
     D(ci).posErr = pe; D(ci).meanCS = mcs; D(ci).restarts = nDiv;
@@ -865,27 +545,16 @@ save(fullfile(cfg.runDir, sprintf('surr_eval_seed%d.mat', cfg.seed)), 'D', '-v7.
 fprintf('SURR_EVAL_DONE %d cases\n', numel(D));
 end
 
-% ---- 3-controller comparison flight ----------------------------------------
-function compare_flight(cfg, teacher, lqr, cases, sur, sac, conf)
-% One representative case per trajectory FAMILY; fly all controllers on the SAME
-% reference realization and dump full position trajectories + tracking error:
-%   (a) LQR-only        u = uh - K e
-%   (b) teacher NMPC    = SAC-NMPC: scenario-M5 acados with the SAC-TUNED Q,R
-%       (deterministic SAC policy a=tanh(mu)); apply the NMPC iterate every step,
-%       NO LQR fallback (teacher is pure NMPC).
-%   (c) surrogate alpha=1  u = sat(u_LQR + Delta_u_hat)  (full residual, no gate).
-%   (d) proposed BLEND     u = sat(u_LQR + alpha*Delta_u_hat),
-%                          alpha = c_S * g_L(c_LQR),
-%                          g_L = clip((c_high - c_LQR)/(c_high - c_low), 0, 1).
-%       c_S = surrogate cs head (recent tracking quality); c_LQR = logistic.
-%       Optional alpha_safe = min{alpha, (1-eps)*alpha_bar} when D1_ALPHA_SAFE=1.
-% Pick one case per family (mid speed/accel = middle of the family block).
+% ---- 4-controller comparison flight ----------------------------------------
+function sel = family_cases(cases)
+% One case per trajectory family: the middle case of the family block, or the hardest
+% (max speed, then max acceleration) with D1_HARD=1. Shared by compare and gate grid.
 fams = cell(1, numel(cases));
 for i = 1:numel(cases)
     g = cases(i).groupId; p = find(g=='|', 1); fams{i} = g(1:p-1);
 end
 uf = unique(fams, 'stable');
-hard = strcmp(getenv_str('D1_HARD','0'), '1');        % 1 = hardest (max v,a) per family
+hard = strcmp(d1_getenv_str('D1_HARD','0'), '1');
 sel = zeros(1, numel(uf));
 for f = 1:numel(uf)
     ids = find(strcmp(fams, uf{f}));
@@ -895,45 +564,51 @@ for f = 1:numel(uf)
             tk = regexp(cases(ids(t)).groupId, 'v([\d.]+)\|a([\d.]+)', 'tokens', 'once');
             sc(t) = str2double(tk{1})*100 + str2double(tk{2});   % speed dominates accel
         end
-        [~, jj] = max(sc); sel(f) = ids(jj);          % hardest case of the family
+        [~, jj] = max(sc); sel(f) = ids(jj);
     else
-        sel(f) = ids(max(1, round(numel(ids)/2)));    % middle case of the family
+        sel(f) = ids(max(1, round(numel(ids)/2)));
     end
 end
-% teacher = SAC-NMPC: use the deterministic SAC policy weights (a = tanh(mu)),
-% set ONCE (persist on the solver). This is the frozen SAC-tuned teacher.
+end
+
+function compare_flight(cfg, teacher, lqr, cases, sur, sac, conf)
+% One representative case per trajectory FAMILY; fly all controllers on the SAME
+% reference, plant and wind realization and dump full trajectories + tracking error:
+%   (a) LQR-only        u = sat(uh - K e)
+%   (b) teacher NMPC    SAC-NMPC (deterministic SAC policy a = tanh(mu)), privileged
+%                       wind, d1_teacher_step, no LQR fallback
+%   (c) surrogate alpha=1  u = sat(sat(u_LQR) + Delta_u_hat)  (full residual, no gate)
+%   (d) proposed blend     d1_blend_control (alpha = c_S * g_L(c_LQR))
+sel = family_cases(cases);
 aMean = tanh(extractdata(sac.mu));
-[Qt, Rt] = action_to_QR(aMean, cfg); set_teacher_weights(teacher, Qt, Rt, cfg);
+[Qt, Rt] = d1_action_to_QR(aMean, cfg); d1_set_teacher_weights(teacher, Qt, Rt, cfg);
 fprintf('COMPARE teacher weights = SAC-NMPC (a=tanh(mu)); diag(Q)=[%s]\n', ...
     strtrim(sprintf('%.3g ', diag(Qt))));
 haveConf = ~isempty(conf) && isfield(conf,'LQR') && ~isempty(conf.LQR.w);
-fprintf('COMPARE blend: u=sat(u_LQR+alpha*Du), alpha=c_S*g_L(c_LQR); c_LQR %s, alphaSafe=%d\n', ...
-    ternary(haveConf, 'trained', 'MISSING(gL=0)'), cfg.alphaSafe);
+fprintf('COMPARE blend: u=sat(sat(u_LQR)+alpha*Du), alpha=c_S*g_L(c_LQR); c_LQR %s, alphaSafe=%d\n', ...
+    ternary(haveConf, 'trained', 'MISSING (g_L=1, alpha=c_S)'), cfg.alphaSafe);
 % Flight plant: nominal, or OFF-NOMINAL (same perturbed plant for ALL controllers;
 % LQR gain and the teacher model stay nominal-designed -> a fair robustness test).
-pscale = getenv_num('D1_PLANT_PERTURB', 0);
+pscale = d1_getenv_num('D1_PLANT_PERTURB', 0);
 testTheta = perturb_plant(cfg.plant.nominal, pscale, cfg.seed);
-if pscale > 0
-    fprintf('COMPARE flight plant = OFF-NOMINAL (perturb scale %.2f x train rho)\n', pscale);
-else
-    fprintf('COMPARE flight plant = nominal\n');
-end
+fprintf('COMPARE flight plant = %s (perturb scale %.2f x train rho)\n', ...
+    ternary(pscale > 0, 'OFF-NOMINAL', 'nominal'), pscale);
 D = struct('groupId',{},'family',{},'Xref',{},'xL',{},'xN',{},'xS',{},'xB',{}, ...
     'peL',{},'peN',{},'peS',{},'peB',{},'alpha',{},'okN',{},'restarts',{});
 for ci = 1:numel(sel)
     kase = cases(sel(ci));
     [Xr, xL, xN, xS, xB, okN, alp, nDiv] = fly_compare(teacher, lqr, sur, kase, cfg, conf, testTheta);
-    peL = track_err(xL, Xr); peN = track_err(xN, Xr);
-    peS = track_err(xS, Xr); peB = track_err(xB, Xr);  % pure surrogate (no safety) / blend
-    D(ci).groupId = kase.groupId; D(ci).family = uf{ci};
+    peL = d1_track_err(xL, Xr); peN = d1_track_err(xN, Xr);
+    peS = d1_track_err(xS, Xr); peB = d1_track_err(xB, Xr);
+    D(ci).groupId = kase.groupId; D(ci).family = kase.groupId(1:find(kase.groupId=='|',1)-1);
     D(ci).Xref = Xr; D(ci).xL = xL; D(ci).xN = xN; D(ci).xS = xS; D(ci).xB = xB;
     D(ci).peL = peL; D(ci).peN = peN; D(ci).peS = peS; D(ci).peB = peB;
     D(ci).alpha = alp; D(ci).okN = okN; D(ci).restarts = nDiv;
     fprintf(['CMP %-18s | LQR rmse=%.3f max=%.3f | NMPC rmse=%.3f max=%.3f | ' ...
         'SUR rmse=%.3f max=%.3f | BLEND rmse=%.3f max=%.3f | meanA=%.2f okN=%.2f | ' ...
         'restarts L/N/S/B=%d/%d/%d/%d\n'], ...
-        kase.groupId, rmse_(peL), max_(peL), rmse_(peN), max_(peN), ...
-        rmse_(peS), max_(peS), rmse_(peB), max_(peB), mean(alp(isfinite(alp))), mean(okN), nDiv);
+        kase.groupId, rmse_(peL), max(peL), rmse_(peN), max(peN), ...
+        rmse_(peS), max(peS), rmse_(peB), max(peB), mean(alp(isfinite(alp))), mean(okN), nDiv);
 end
 if ~isfolder(cfg.runDir), mkdir(cfg.runDir); end
 save(fullfile(cfg.runDir, sprintf('compare_seed%d.mat', cfg.seed)), 'D', '-v7.3');
@@ -941,168 +616,94 @@ fprintf('COMPARE_DONE %d families\n', numel(D));
 end
 
 function r = rmse_(pe)
-pe = pe(isfinite(pe)); if isempty(pe), r = NaN; else, r = sqrt(mean(pe.^2)); end
-end
-function m = max_(pe)
-pe = pe(isfinite(pe)); if isempty(pe), m = NaN; else, m = max(pe); end
-end
-function V = lyapV(x, xref, P)
-e = x - xref; V = e.' * P * e;                        % V=e'Pe, full 12-state error
+r = sqrt(mean(pe.^2));
 end
 function s = ternary(c, a, b); if c, s = a; else, s = b; end; end
 
 function [Xr, xL, xN, xS, xB, okN, alphaTraj, nDiv] = fly_compare(teacher, lqr, sur, kase, cfg, conf, theta)
 % Four controllers on the SAME reference, plant and training-wind realization; common
-% flight rules (plant_step: full length, restart on the reference after divergence).
-if nargin < 6, conf = []; end
-if nargin < 7 || isempty(theta), theta = cfg.plant.nominal; end  % flight plant
-Ts = cfg.Ts; N = cfg.N;
-Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
-uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
-lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+% flight rules (full length, restart on the reference after divergence).
+Ts = cfg.Ts; uh = cfg.uh;
+Xref = kase.Xref; T = d1_case_len(Xref, cfg);
 % x?(:,k) is the state AFTER integrating step k -> compared with Xref(:,k+1)
 % (same alignment as the training reward). Diverged steps stay NaN.
 Xr = Xref(:, 2:T+1);
 xL = nan(12,T); xN = nan(12,T); xS = nan(12,T); xB = nan(12,T);
 okN = zeros(1,T); alphaTraj = nan(1,T); nDiv = [0 0 0 0];      % restarts LQR/NMPC/SUR/BLEND
-if cfg.windOn, ds = sample_wind(cfg, T); else, ds = []; end
+if cfg.windOn, ds = d1_sample_wind(cfg, T); else, ds = []; end
 
 % (a) LQR-only ----------------------------------------------------------------
 x = Xref(:,1);
 for k = 1:T
-    u = uh - lqr.K*(x - Xref(:,k)); u = min(max(u,lo),hi);
-    [x, div] = plant_step((k-1)*Ts, x, u, Ts, theta, ds);
+    u = d1_sat(uh - lqr.K*(x - Xref(:,k)), cfg);
+    [x, div] = d1_plant_step((k-1)*Ts, x, u, Ts, theta, ds);
     if div, nDiv(1) = nDiv(1) + 1; x = Xref(:,k+1); else, xL(:,k) = x; end
 end
 
-% (b) teacher = SAC-NMPC (weights set by the caller), teacher_step rule.
-x = Xref(:,1); uprev = uh; teacher_reset(teacher, Xref, 1, uh, cfg);
+% (b) teacher = SAC-NMPC (weights set by the caller), privileged wind ----------
+x = Xref(:,1); uprev = uh; d1_teacher_reset(teacher, Xref, 1, cfg);
 for k = 1:T
-    [u, status] = teacher_step(teacher, x, uprev, Xref, k, uh, cfg); okN(k) = (status == 0);
-    u = min(max(u,lo),hi); uprev = u;
-    [x, div] = plant_step((k-1)*Ts, x, u, Ts, theta, ds);
+    t = (k-1)*Ts; F = d1_wind_now(ds, t, x, uprev, theta);
+    [u, status] = d1_teacher_step(teacher, x, uprev, Xref, k, F, cfg); okN(k) = (status == 0);
+    u = d1_sat(u, cfg); uprev = u;
+    [x, div] = d1_plant_step(t, x, u, Ts, theta, ds);
     if div
         nDiv(2) = nDiv(2) + 1; x = Xref(:,k+1); uprev = uh;
-        teacher_reset(teacher, Xref, k+1, uh, cfg);
+        d1_teacher_reset(teacher, Xref, k+1, cfg);
     else
         xN(:,k) = x;
     end
 end
 
-% (c) surrogate at alpha=1: u = sat(u_LQR + Delta_u_hat) -- full residual, no gate
-x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
+% (c) surrogate at alpha=1: u = sat(sat(u_LQR) + Delta_u_hat) -- full residual, no gate
+x = Xref(:,1); h = d1_hist_init(x, cfg);
 for k = 1:T
-    feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
-    uLk = uh - lqr.K*(x - Xref(:,k));
+    feat = d1_hist_feature(h, Xref(:,k:k+10));
     du = zeros(4,1);
     if all(isfinite(feat))
-        du = surrogate_predict_du(sur, feat);
+        du = d1_sur_predict_du(sur, feat);
         if ~all(isfinite(du)), du = zeros(4,1); end
     end
-    u = min(max(uLk + du, lo), hi);
-    stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
-    [x, div] = plant_step((k-1)*Ts, x, u, Ts, theta, ds);
+    u = d1_sat(d1_sat(uh - lqr.K*(x - Xref(:,k)), cfg) + du, cfg);
+    [xNew, div] = d1_plant_step((k-1)*Ts, x, u, Ts, theta, ds);
     if div
-        nDiv(3) = nDiv(3) + 1; x = Xref(:,k+1);
-        stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
+        nDiv(3) = nDiv(3) + 1; x = Xref(:,k+1); h = d1_hist_init(x, cfg);
     else
-        xS(:,k) = x;
+        h = d1_hist_push(h, u, xNew, cfg); x = xNew; xS(:,k) = x;
     end
 end
 
-% (d) proposed blend (blend_control) --------------------------------------------
-x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
+% (d) proposed blend (d1_blend_control) -----------------------------------------
+x = Xref(:,1); h = d1_hist_init(x, cfg);
 for k = 1:T
     e = x - Xref(:,k);
-    [u, alphaTraj(k)] = blend_control(uh - lqr.K*e, e, stateHist, inputHist, ...
-        Xref(:,k:k+10), sur, conf, lqr, cfg);
-    stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
-    [x, div] = plant_step((k-1)*Ts, x, u, Ts, theta, ds);
+    [u, alphaTraj(k)] = d1_blend_control(uh - lqr.K*e, e, h, Xref(:,k:k+10), sur, conf, lqr, cfg);
+    [xNew, div] = d1_plant_step((k-1)*Ts, x, u, Ts, theta, ds);
     if div
-        nDiv(4) = nDiv(4) + 1; x = Xref(:,k+1);
-        stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
+        nDiv(4) = nDiv(4) + 1; x = Xref(:,k+1); h = d1_hist_init(x, cfg);
     else
-        xB(:,k) = x;
+        h = d1_hist_push(h, u, xNew, cfg); x = xNew; xB(:,k) = x;
     end
 end
-end
-
-function [u, alpha, uu] = blend_control(uBase, e, stateHist, inputHist, XrefLook, sur, conf, lqr, cfg)
-% Deployed controller: u = sat(uBase + alpha*Du), alpha = c_S * g_L(c_LQR),
-% g_L = clip((c_high - c_LQR)/(c_high - c_low), 0, 1); optional alpha_safe. uBase is the
-% UNSATURATED base law (u_h - K e for the proposed controller). Non-finite feature or
-% network output -> Du = 0, c_S = 0 (pure base). uu = unsaturated sum (for anti-windup).
-lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
-feat = surrogate_build_feature(stateHist, inputHist, XrefLook, zeros(12,1));
-du = zeros(4,1); cS = 0;
-if all(isfinite(feat))
-    du = surrogate_predict_du(sur, feat); cS = surrogate_predict_cs(sur, feat);
-    if ~all(isfinite([du; cS])), du = zeros(4,1); cS = 0; end
-end
-haveConf = ~isempty(conf) && isfield(conf,'LQR') && ~isempty(conf.LQR.w);
-if haveConf, cLp = predict_logistic(conf.LQR, conf_feature_online(e).'); else, cLp = 0; end
-gL = min(max((cfg.cHigh - cLp)/(cfg.cHigh - cfg.cLow), 0), 1);
-alpha = cS * gL;
-if cfg.alphaSafe
-    alpha = min(alpha, (1-cfg.epsSafe)*alpha_bar_est(e, du, lqr));
-end
-uu = uBase + alpha*du;
-u = min(max(uu, lo), hi);
-end
-
-function ab = alpha_bar_est(e, d, lqr)
-% linearized one-step contraction budget alpha_bar (Prop 1); d = residual Delta_u
-Acl = lqr.Ad - lqr.Bd*lqr.K; S = lqr.P;
-m = e.'*(lqr.Q + lqr.K.'*lqr.R*lqr.K)*e;
-b = 2 * e.'*Acl.'*S*lqr.Bd*d;
-q = d.'*lqr.Bd.'*S*lqr.Bd*d;
-if q > 1e-12
-    ab = (-b + sqrt(max(b^2 + 4*q*m,0)))/(2*q);
-elseif b > 1e-12
-    ab = m/b;
-else
-    ab = inf;
-end
-ab = max(ab, 0);
 end
 
 % ============================================================================
 % GATE GRID: evaluate ONE (c_low, c_high) blend-gate setting on the validation
-% families. Teacher-free (no acados): flies only LQR-only and the proposed blend
-% u = sat(u_LQR + alpha*Delta_u), alpha = c_S*g_L(c_LQR). The CI matrix sweeps the
-% (c_low, c_high) grid; each job prints one GATE_RESULT line -> the RMSE surface.
+% families. Teacher-free (no acados): flies only LQR-only and the proposed blend.
+% The CI matrix sweeps the (c_low, c_high) grid; each job prints one GATE_RESULT line.
 function gate_grid_flight(cfg, lqr, cases, sur, conf)
 assert(cfg.cHigh > cfg.cLow, 'gate grid needs c_high > c_low (got %.3f, %.3f).', ...
     cfg.cHigh, cfg.cLow);
 haveConf = ~isempty(conf) && isfield(conf,'LQR') && ~isempty(conf.LQR.w);
 if ~haveConf
-    fprintf('GATE_WARN c_LQR MISSING in checkpoint -> g_L=0 -> blend == LQR\n');
+    fprintf('GATE_WARN c_LQR MISSING -> g_L=1 -> alpha = c_S\n');
 end
-% one case per family (mid, or hardest with D1_HARD=1) -- same set as compare
-fams = cell(1, numel(cases));
-for i = 1:numel(cases)
-    g = cases(i).groupId; p = find(g=='|', 1); fams{i} = g(1:p-1);
-end
-uf = unique(fams, 'stable');
-hard = strcmp(getenv_str('D1_HARD','0'), '1');
-sel = zeros(1, numel(uf));
-for f = 1:numel(uf)
-    ids = find(strcmp(fams, uf{f}));
-    if hard
-        sc = zeros(numel(ids),1);
-        for t = 1:numel(ids)
-            tk = regexp(cases(ids(t)).groupId, 'v([\d.]+)\|a([\d.]+)', 'tokens', 'once');
-            sc(t) = str2double(tk{1})*100 + str2double(tk{2});
-        end
-        [~, jj] = max(sc); sel(f) = ids(jj);
-    else
-        sel(f) = ids(max(1, round(numel(ids)/2)));
-    end
-end
-pscale = getenv_num('D1_PLANT_PERTURB', 0);
+sel = family_cases(cases);
+hard = strcmp(d1_getenv_str('D1_HARD','0'), '1');
+pscale = d1_getenv_num('D1_PLANT_PERTURB', 0);
 theta = perturb_plant(cfg.plant.nominal, pscale, cfg.seed);
 fprintf('GATE start c_low=%.3f c_high=%.3f hard=%d pscale=%.2f alphaSafe=%d (%d families)\n', ...
-    cfg.cLow, cfg.cHigh, hard, pscale, cfg.alphaSafe, numel(uf));
+    cfg.cLow, cfg.cHigh, hard, pscale, cfg.alphaSafe, numel(sel));
 peLall = []; peBall = []; aAll = [];
 for ci = 1:numel(sel)
     kase = cases(sel(ci));
@@ -1113,65 +714,55 @@ for ci = 1:numel(sel)
 end
 rmseB = rmse_(peBall); rmseL = rmse_(peLall);
 fprintf('GATE_RESULT c_low=%.3f c_high=%.3f rmse_blend=%.4f rmse_lqr=%.4f delta=%.4f meanA=%.3f n=%d\n', ...
-    cfg.cLow, cfg.cHigh, rmseB, rmseL, rmseB-rmseL, mean(aAll(isfinite(aAll))), numel(uf));
+    cfg.cLow, cfg.cHigh, rmseB, rmseL, rmseB-rmseL, mean(aAll(isfinite(aAll))), numel(sel));
 if ~isfolder(cfg.runDir), mkdir(cfg.runDir); end
 res = struct('cLow',cfg.cLow,'cHigh',cfg.cHigh,'rmseB',rmseB,'rmseL',rmseL, ...
-    'meanA',mean(aAll(isfinite(aAll))),'hard',hard,'pscale',pscale,'seed',cfg.seed); %#ok<NASGU>
+    'meanA',mean(aAll(isfinite(aAll))),'hard',hard,'pscale',pscale,'seed',cfg.seed);
 save(fullfile(cfg.runDir, sprintf('gate_seed%d_cl%.2f_ch%.2f.mat', ...
     cfg.seed, cfg.cLow, cfg.cHigh)), 'res');
 end
 
 function [peL, peB, alphaTraj] = fly_gate(lqr, sur, kase, cfg, conf, theta)
-% Teacher-free flight for gate tuning: (a) LQR-only, (d) proposed blend -- the same
-% laws and flight rules as fly_compare branches (a)/(d) (training wind, full length,
-% restart on the reference after divergence, capped per-step error).
-if nargin < 6 || isempty(theta), theta = cfg.plant.nominal; end
-Ts = cfg.Ts; N = cfg.N;
-Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-N-1);
-uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
-lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+% Teacher-free flight for gate tuning: (a) LQR-only, (d) proposed blend -- the same laws
+% and flight rules as fly_compare branches (a)/(d).
+Ts = cfg.Ts; uh = cfg.uh;
+Xref = kase.Xref; T = d1_case_len(Xref, cfg);
 Xr = Xref(:, 2:T+1);
 xL = nan(12,T); xB = nan(12,T); alphaTraj = nan(1,T);
-if cfg.windOn, ds = sample_wind(cfg, T); else, ds = []; end
+if cfg.windOn, ds = d1_sample_wind(cfg, T); else, ds = []; end
 % (a) LQR-only
 x = Xref(:,1);
 for k = 1:T
-    u = uh - lqr.K*(x - Xref(:,k)); u = min(max(u,lo),hi);
-    [x, div] = plant_step((k-1)*Ts, x, u, Ts, theta, ds);
+    u = d1_sat(uh - lqr.K*(x - Xref(:,k)), cfg);
+    [x, div] = d1_plant_step((k-1)*Ts, x, u, Ts, theta, ds);
     if div, x = Xref(:,k+1); else, xL(:,k) = x; end
 end
 % (d) proposed blend
-x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
+x = Xref(:,1); h = d1_hist_init(x, cfg);
 for k = 1:T
     e = x - Xref(:,k);
-    [u, alphaTraj(k)] = blend_control(uh - lqr.K*e, e, stateHist, inputHist, ...
-        Xref(:,k:k+10), sur, conf, lqr, cfg);
-    stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
-    [x, div] = plant_step((k-1)*Ts, x, u, Ts, theta, ds);
+    [u, alphaTraj(k)] = d1_blend_control(uh - lqr.K*e, e, h, Xref(:,k:k+10), sur, conf, lqr, cfg);
+    [xNew, div] = d1_plant_step((k-1)*Ts, x, u, Ts, theta, ds);
     if div
-        x = Xref(:,k+1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
+        x = Xref(:,k+1); h = d1_hist_init(x, cfg);
     else
-        xB(:,k) = x;
+        h = d1_hist_push(h, u, xNew, cfg); x = xNew; xB(:,k) = x;
     end
 end
-peL = track_err(xL, Xr);
-peB = track_err(xB, Xr);
+peL = d1_track_err(xL, Xr);
+peB = d1_track_err(xB, Xr);
 end
 
 % ============================================================================
-% CONFIDENCE: c_S and c_LQR = P(next H=20 steps contract | current error state).
-% Learned as logistic classifiers over closed-loop rollouts on the SAME case bank
-% / test conditions. Label at step k = isContracting(k) (V_{k+H} < V_k in V=e'Pe,
-% P = LQR Riccati); feature = the error state e_k (+ per-group magnitudes).
+% CONFIDENCE: c_S (surrogate head) and c_LQR = P(next H=20 steps contract | error).
 % ============================================================================
-function consolidate_confidence(cfg, lqr, cases, sur, st, ckptPath, confName) %#ok<INUSD>
-% Phase B: train the c_S head (surrogate closed-loop alpha=1 tracking RMS) on a COPY of
-% the surrogate + the c_LQR logistic (LQR V-contraction). The training checkpoint is
-% NEVER modified (the training surrogate's c_S head stays untouched, so every
-% consolidation starts from the same state and does not depend on job boundaries).
-% The consolidated surrogate and conf are saved TOGETHER in <runDir>/<confName>: that
-% pair is the deployed controller used by compare, gate, surr_eval and final evaluation.
-if nargin < 7, confName = sprintf('conf_seed%d.mat', cfg.seed); end
+function consolidate_confidence(cfg, lqr, cases, sur, st, confName)
+% Phase B: train the c_S head (surrogate closed-loop alpha=1 tracking quality) on a COPY
+% of the surrogate + the c_LQR logistic (LQR V-contraction), both in the training wind.
+% The training checkpoint is NEVER modified. The consolidated surrogate and conf are
+% saved TOGETHER in <runDir>/<confName>: that pair is the deployed controller used by
+% compare, gate, surr_eval and the final evaluation.
+if nargin < 6, confName = sprintf('conf_seed%d.mat', cfg.seed); end
 sur = train_cS_head(cfg, lqr, cases, sur);
 confLQR = train_cLQR(cfg, lqr, cases);
 conf.LQR = confLQR; conf.epsP = cfg.epsP; conf.H = cfg.H;
@@ -1179,47 +770,45 @@ conf.def = ['c_S=exp(-(RMS_pastH_pos/epsP)^2) predicted by surrogate cs head; ' 
     'c_LQR=logistic P(V_{k+H}<V_k)'];
 conf.iter = st.iter;
 save(fullfile(cfg.runDir, confName), 'conf', 'sur', '-v7.3');
-fprintf('CONF_DONE c_LQR(acc=%.2f base=%.2f n=%d) epsP=%.3g\n', ...
-    confLQR.acc, confLQR.base, confLQR.n, cfg.epsP);
+fprintf('CONF_DONE c_LQR(acc=%.2f base=%.2f n=%d) epsP=%.3g -> %s\n', ...
+    confLQR.acc, confLQR.base, confLQR.n, cfg.epsP, confName);
 end
 
 function sur = train_cS_head(cfg, lqr, cases, sur)
-% Fly surrogate closed-loop at alpha=1: u=sat(u_LQR+Delta_u_hat). Collect
-% (feature z_k, s_k), s_k=exp(-(RMS pos err over PAST H steps / epsP)^2). Train
-% ONLY the cs head (freeze trunk + du head).
-Ts=cfg.Ts; theta=cfg.plant.nominal; H=cfg.H; uh=[cfg.plant.m*cfg.plant.g;0;0;0];
-lo=[0;-0.5;-0.5;-0.25]; hi=[cfg.plant.Tmax;0.5;0.5;0.25];
+% Fly the surrogate closed-loop at alpha=1: u = sat(sat(u_LQR) + Delta_u_hat), in the
+% training wind. Collect (feature_k, s_k), s_k = exp(-(RMS pos err over the PAST H
+% steps / epsP)^2). Train ONLY the cs head (trunk + du head frozen).
+Ts=cfg.Ts; theta=cfg.plant.nominal; H=cfg.H; uh=cfg.uh;
 nSel = min(cfg.csCasesPerCall, numel(cases));
 sel = unique(round(linspace(1, numel(cases), nSel)));
 Zall = zeros(208,0,'single'); Sall = zeros(1,0,'single');
 for ci = 1:numel(sel)
-    kase = cases(sel(ci)); Xref = kase.Xref; T = min(cfg.stepsPerCase, size(Xref,2)-11);
-    x = Xref(:,1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
-    feats = zeros(208, T); perr = nan(1,T); nok = 0;
-    if cfg.windOn, ds = sample_wind(cfg, T); else, ds = []; end   % same wind law as training
+    kase = cases(sel(ci)); Xref = kase.Xref; T = d1_case_len(Xref, cfg);
+    x = Xref(:,1); h = d1_hist_init(x, cfg);
+    feats = nan(208, T, 'single'); perr = nan(1,T);
+    if cfg.windOn, ds = d1_sample_wind(cfg, T); else, ds = []; end   % same wind law as training
     for k = 1:T
-        feat = surrogate_build_feature(stateHist, inputHist, Xref(:,k:k+10), zeros(12,1));
-        if ~all(isfinite(feat)), break; end
-        uLk = uh - lqr.K*(x - Xref(:,k));
-        du  = surrogate_predict_du(sur, feat);
-        if ~all(isfinite(du)), du = zeros(4,1); end
-        u = min(max(uLk + du, lo), hi);                  % alpha = 1
-        feats(:,k) = single(feat) ./ sur.featScale;
-        stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
-        [x, div] = plant_step((k-1)*Ts, x, u, Ts, theta, ds);
-        nok = k;
+        feat = d1_hist_feature(h, Xref(:,k:k+10));
+        du = zeros(4,1);
+        if all(isfinite(feat))
+            du = d1_sur_predict_du(sur, feat);
+            if ~all(isfinite(du)), du = zeros(4,1); end
+            feats(:,k) = single(feat) ./ sur.featScale;
+        end
+        u = d1_sat(d1_sat(uh - lqr.K*(x - Xref(:,k)), cfg) + du, cfg);   % alpha = 1
+        [xNew, div] = d1_plant_step((k-1)*Ts, x, u, Ts, theta, ds);
         if div
             % diverged: charge the 5 m cap, restart on the reference, keep flying
             perr(k) = 5;
-            x = Xref(:,k+1); stateHist = repmat(x,1,4); inputHist = repmat(uh,1,4);
-            continue;
+            x = Xref(:,k+1); h = d1_hist_init(x, cfg);
+        else
+            h = d1_hist_push(h, u, xNew, cfg); x = xNew;
+            perr(k) = min(norm(x(1:3) - Xref(1:3,k+1)), 5);   % same capped error as d1_track_err
         end
-        perr(k) = min(norm(x(1:3) - Xref(1:3,k+1)), 5);   % same capped error as track_err
     end
-    for k = H:nok
-        wv = perr(k-H+1:k); wv = wv(isfinite(wv));
-        if isempty(wv), continue; end
-        E20 = sqrt(mean(wv.^2)); sk = exp(-(E20/cfg.epsP)^2);
+    for k = H:T
+        if ~all(isfinite(feats(:,k))), continue; end
+        E20 = sqrt(mean(perr(k-H+1:k).^2)); sk = exp(-(E20/cfg.epsP)^2);
         Zall(:,end+1) = feats(:,k); Sall(end+1) = single(sk); %#ok<AGROW>
     end
 end
@@ -1250,25 +839,13 @@ confLQR = fit_logistic(XL.', yL.');
 end
 
 function [X, y] = conf_samples(E, P, H)
-% feature (16-dim) + binary contract label per step with a full finite window
+% feature (16-dim, d1_conf_feature) + binary contract label per step with a full
+% finite window
 if isempty(E) || size(E,2) <= H, X = zeros(16,0); y = zeros(1,0); return; end
 o = d1_finite_horizon_contraction(E, P, H, struct());
 m = o.validMask & o.windowFinite;
-Ew = E; Ew(4:6,:) = mod(Ew(4:6,:)+pi, 2*pi) - pi;
-F = conf_feature(Ew);
+F = d1_conf_feature(E);
 X = F(:, m); y = double(o.isContracting(m));
-end
-
-function F = conf_feature(Ew)
-% 12 (wrapped) error states + 4 group magnitudes (pos/att/vel/rate)
-pos = vecnorm(Ew(1:3,:)); att = vecnorm(Ew(4:6,:));
-vel = vecnorm(Ew(7:9,:)); rate = vecnorm(Ew(10:12,:));
-F = [Ew; pos; att; vel; rate];                              % 16 x N
-end
-
-function f = conf_feature_online(e)
-ew = e; ew(4:6) = mod(ew(4:6)+pi, 2*pi) - pi;
-f = conf_feature(ew);                                       % 16 x 1
 end
 
 function clf = fit_logistic(X, y)
@@ -1289,28 +866,22 @@ p = 1./(1+exp(-(Z*w + b)));
 clf = struct('w',w,'b',b,'mu',mu,'sg',sg,'acc',mean((p>0.5)==y),'base',mean(y),'n',n);
 end
 
-function p = predict_logistic(clf, X)
-% X: n x d -> p: n x 1 = P(contract)
-if isempty(clf) || isempty(clf.w), p = 0.5*ones(size(X,1),1); return; end
-Z = (X - clf.mu)./clf.sg; p = 1./(1+exp(-(Z*clf.w + clf.b)));
-end
-
 function E = rollout_error_lqr(cfg, lqr, kase)
-Ts = cfg.Ts; theta = cfg.plant.nominal; Xref = kase.Xref;
-T = min(cfg.stepsPerCase, size(Xref,2)-1);
-uh = [cfg.plant.m*cfg.plant.g;0;0;0];
-lo = [0;-0.5;-0.5;-0.25]; hi = [cfg.plant.Tmax;0.5;0.5;0.25];
+% LQR closed loop on the nominal plant in the training wind, full length; a divergence
+% restarts on the reference and leaves a NaN column (breaks every window across it).
+Ts = cfg.Ts; theta = cfg.plant.nominal; Xref = kase.Xref; uh = cfg.uh;
+T = d1_case_len(Xref, cfg);
 x = Xref(:,1); X = nan(12,T);
-if cfg.windOn, ds = sample_wind(cfg, T); else, ds = []; end   % same wind law as training
+if cfg.windOn, ds = d1_sample_wind(cfg, T); else, ds = []; end   % same wind law as training
 for k = 1:T
-    u = uh - lqr.K*(x - Xref(:,k)); u = min(max(u,lo),hi);
-    [x, div] = plant_step((k-1)*Ts, x, u, Ts, theta, ds);
+    u = d1_sat(uh - lqr.K*(x - Xref(:,k)), cfg);
+    [x, div] = d1_plant_step((k-1)*Ts, x, u, Ts, theta, ds);
     if div
-        X(:,k) = NaN;                                % NaN breaks every contraction window across it
+        X(:,k) = NaN;
         x = Xref(:,k+1);                             % restart on the reference, run the full case
     else
         X(:,k) = x;
     end
 end
-E = X - Xref(:,2:T+1);                       % align state_k with ref_{k+1}
+E = X - Xref(:,2:T+1);                               % align state_k with ref_{k+1}
 end

@@ -1,8 +1,10 @@
 name: D1 joint pipeline (5 seeds)
 
-# ONE integrated task per seed: SAC tunes NMPC Q,R -> acados teacher + paired LQR
-# -> streaming surrogate -> contraction -> checkpoint. Open-ended (runs until
-# wall_seconds, checkpoints, resume to continue). 5 independent seeds in parallel.
+# ONE integrated task per seed: SAC tunes NMPC Q,R -> acados teacher (privileged
+# wind) + paired LQR -> streaming residual surrogate -> c_S / c_LQR consolidation
+# -> checkpoint. Open-ended (runs until wall_seconds or stop_iter, checkpoints,
+# resume to continue). Code: experiments/run_d1_joint_pipeline.m + src/joint/d1_*.m;
+# method: docs/D1_method.pdf.
 
 on:
   workflow_dispatch:

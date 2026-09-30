@@ -1,10 +1,14 @@
 function [Xref, Uref, details] = quad_complete_flat_reference( ...
-        Xref, sampleTime, theta, yawReference)
+        Xref, sampleTime, theta, yawReference, externalForce)
 %QUAD_COMPLETE_FLAT_REFERENCE Complete position/velocity into a full reference.
 %
 % The completion uses the desired translational acceleration to construct the
 % body z-axis, then obtains Euler angles, body rates, and nominal feedforward
 % generalized inputs for the 12-state quadrotor model.
+%
+% externalForce (optional, 3x1 or 3xN, world frame, default 0): a known external
+% force acting on the vehicle; the thrust vector then has to supply
+% m (a + g e3) + Dv v - externalForce.
 
 if nargin < 3 || isempty(theta)
     cfg = step1_plant_config();
@@ -12,6 +16,9 @@ if nargin < 3 || isempty(theta)
 end
 if nargin < 4 || isempty(yawReference)
     yawReference = 0;
+end
+if nargin < 5 || isempty(externalForce)
+    externalForce = zeros(3, 1);
 end
 
 validateattributes(Xref, {'numeric'}, {'2d', 'nrows', 12, 'finite'});
@@ -27,7 +34,7 @@ yawReference = expand_yaw(yawReference, sampleCount);
 velocity = Xref(7:9, :);
 acceleration = finite_difference(velocity, sampleTime);
 forceVector = theta.m .* (acceleration + [0; 0; theta.g]) + ...
-    theta.Dv(:) .* velocity;
+    theta.Dv(:) .* velocity - externalForce;
 forceNorm = vecnorm(forceVector, 2, 1);
 if any(forceNorm <= 100 * eps)
     error('quad_complete_flat_reference:DegenerateForce', ...

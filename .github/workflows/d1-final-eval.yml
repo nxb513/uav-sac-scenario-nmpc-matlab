@@ -1,9 +1,11 @@
 name: D1 final evaluation (real wind, train / OOD)
 
 # LQR, LQI, linear MPC (chain-independent, job "baseline") and, per SAC chain, the
-# SAC-NMPC teacher (acados), the proposed blend and proposed + I (LQI base), all flown
-# on the same flights: real wind (Neural-Fly force + SWUF-3D field wind) x train / OOD
+# SAC-NMPC teacher (acados; ORACLE: told the exact current wind force, not deployable)
+# and the proposed controller P (deployed pair; does not know the wind), all flown on
+# the same flights: real wind (Neural-Fly force + SWUF-3D field wind) x train / OOD
 # plants x 5 trajectory families. Every controller knows only the nominal model.
+# Code: experiments/d1_final_eval.m (+ src/joint/d1_*.m shared with training).
 # Wind data are downloaded from their sources inside each job, never uploaded.
 
 on:
@@ -19,9 +21,9 @@ on:
         default: '["train","ood"]'
         type: string
       chain_ctrls:
-        description: "Per-chain controllers: Teacher,P,PI"
+        description: "Per-chain controllers: Teacher,P"
         required: true
-        default: "Teacher,P,PI"
+        default: "Teacher,P"
         type: string
       base_ctrls:
         description: "Chain-independent controllers: LQR,LQI,MPC (empty = skip baseline job)"

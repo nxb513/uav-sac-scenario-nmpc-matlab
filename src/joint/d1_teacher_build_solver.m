@@ -11,6 +11,9 @@ function solver = d1_teacher_build_solver(cfg, thetaScenarios)
 %   * Actuator limits enforced by bounding the u_prev states to [umin,umax]
 %     (u_prev_{k+1}=u, so this bounds every applied control).
 %   * Runtime Q,R retune via set('cost_W',...) with no rebuild.
+%   * PRIVILEGED WIND: the known external force F (world frame, N) is an acados
+%     parameter (np = 3) shared by all scenarios, v_dot^i += F/m_i; set every step by
+%     d1_teacher_step (current force, held constant over the horizon).
 %
 % thetaScenarios: 1xM struct array, each field: m, Jd(3), Dv(3), Domega(3),
 %   alphaT, alphaTau(3). Baked into the model at build (fixed per seed).
@@ -27,6 +30,7 @@ ny = M*n1 + nu; ny_e = M*n1;
 xs = SX.sym('x', n1); us = SX.sym('u', nu);
 mp = SX.sym('m'); Jp = SX.sym('J',3); Dvp = SX.sym('Dv',3);
 Domp = SX.sym('Dom',3); aTp = SX.sym('aT'); aTaup = SX.sym('aTau',3);
+Fs = SX.sym('Fext', 3);              % external force (world frame)
 eta = xs(4:6); vel = xs(7:9); om = xs(10:12);
 phi=eta(1); th=eta(2); psi=eta(3);
 cphi=cos(phi); sphi=sin(phi); cth=cos(th); sth=sin(th); cpsi=cos(psi); spsi=sin(psi);
@@ -39,30 +43,32 @@ Jom = Jp.*om;
 cro = [om(2)*Jom(3)-om(3)*Jom(2); om(3)*Jom(1)-om(1)*Jom(3); om(1)*Jom(2)-om(2)*Jom(1)];
 xdot = [vel;
         Wm*om;
-        [0;0;-P.g] + (Tt/mp)*(Rm*[0;0;1]) - Dvp.*vel/mp;
+        [0;0;-P.g] + (Tt/mp)*(Rm*[0;0;1]) - Dvp.*vel/mp + Fs/mp;
         (tau - cro - Domp.*om)./Jp];
-fc = Function('fc', {xs, us, mp, Jp, Dvp, Domp, aTp, aTaup}, {xdot});
+fc = Function('fc', {xs, us, mp, Jp, Dvp, Domp, aTp, aTaup, Fs}, {xdot});
 
 % ---- augmented DISCRETE dynamics --------------------------------------------
 X = SX.sym('X', nxa); du = SX.sym('du', nu);
+Fp = SX.sym('F', 3);                 % acados parameter: known external force
 uprev = X(M*n1+1 : M*n1+nu);
 u = uprev + du;
 Xnext = SX.zeros(nxa, 1);
 for i = 1:M
     th = thetaScenarios(i);
     xi = X((i-1)*n1+1 : i*n1);
-    xi = rk4_step_sym(fc, xi, u, th, Ts);
+    xi = rk4_step_sym(fc, xi, u, th, Ts, Fp);
     Xnext((i-1)*n1+1 : i*n1) = xi;
 end
 Xnext(M*n1+1 : M*n1+nu) = u;         % u_prev_{k+1} = u
 
 model = AcadosModel();
-model.name = 'd1_quad_teacher_m5';
-model.x = X; model.u = du;
+model.name = 'd1_quad_teacher_m5w';
+model.x = X; model.u = du; model.p = Fp;
 model.disc_dyn_expr = Xnext;
 
 ocp = AcadosOcp();
 ocp.model = model;
+ocp.parameter_values = zeros(3, 1);
 ocp.solver_options.N_horizon = N;
 ocp.solver_options.tf = N*Ts;
 
@@ -119,10 +125,10 @@ end
 end
 
 % ============================================================================
-function xn = rk4_step_sym(fc, x, u, th, Ts)
-k1 = fc(x,          u, th.m, th.Jd, th.Dv, th.Domega, th.alphaT, th.alphaTau);
-k2 = fc(x+Ts/2*k1,  u, th.m, th.Jd, th.Dv, th.Domega, th.alphaT, th.alphaTau);
-k3 = fc(x+Ts/2*k2,  u, th.m, th.Jd, th.Dv, th.Domega, th.alphaT, th.alphaTau);
-k4 = fc(x+Ts*k3,    u, th.m, th.Jd, th.Dv, th.Domega, th.alphaT, th.alphaTau);
+function xn = rk4_step_sym(fc, x, u, th, Ts, F)
+k1 = fc(x,          u, th.m, th.Jd, th.Dv, th.Domega, th.alphaT, th.alphaTau, F);
+k2 = fc(x+Ts/2*k1,  u, th.m, th.Jd, th.Dv, th.Domega, th.alphaT, th.alphaTau, F);
+k3 = fc(x+Ts/2*k2,  u, th.m, th.Jd, th.Dv, th.Domega, th.alphaT, th.alphaTau, F);
+k4 = fc(x+Ts*k3,    u, th.m, th.Jd, th.Dv, th.Domega, th.alphaT, th.alphaTau, F);
 xn = x + Ts/6*(k1 + 2*k2 + 2*k3 + k4);
 end

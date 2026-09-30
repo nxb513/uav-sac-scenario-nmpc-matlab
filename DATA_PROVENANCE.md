@@ -1,6 +1,30 @@
 # Data Provenance
 
-## Training-bank reconstruction
+## Method D1 (active)
+
+**Training data are generated, not stored.** Each chain (seed) rebuilds deterministically:
+the 120-case reference bank (`d1_train_cases`, one seed per case name), the teacher's
+M = 5 model scenarios (first draw after `rng(seed)`), and, from the run's random stream
+(saved in every checkpoint), the case draws, the synthetic training wind of every flight
+(`d1_sample_wind`: mean 1-10 m/s, Dryden low-altitude gusts, linear rotor drag) and the
+SAC exploration. No measured wind data are used in training.
+
+**Measured wind is used for validation only** (`experiments/d1_final_eval.m`). The data
+are downloaded from their original sources inside the CI job (`tools/wind/fetch_wind.sh`)
+and converted by `tools/wind/prepare_wind_series.py`. They are never committed or
+uploaded as artifacts.
+
+- Neural-Fly (O'Connell et al., Science Robotics 2022; github.com/aerorobotics/neural-fly):
+  residual aerodynamic force measured on a 2.53 kg quadrotor in a wind tunnel. Use:
+  personal/educational only, not redistributed. Conversion to our 0.486 kg vehicle:
+  `F = (m/2.53) (fa - mean(fa | no wind))`.
+- SWUF-3D (Zenodo record 17700905, CC-BY 4.0): 3D sonic-anemometer field wind. Conversion:
+  `F = (m/2.53) (c1 + c2 |w|) w`, with (c1, c2) fitted on the Neural-Fly steady-wind mean
+  forces; first 49 s of each flight.
+
+## Legacy pipeline (superseded; see `docs/legacy_pipeline.md`)
+
+### Training-bank reconstruction (legacy)
 
 The obsolete low-speed specialist context bank remains removed. The active
 bank is reconstructed rather than committed: seed `300830301` generates 2,700
@@ -21,13 +45,13 @@ extracts 221 reference columns for 200 actions and the terminal H=20 preview.
 The generated bank is not committed; its audit writes a SHA-256 sidecar beside
 the reconstructed MAT artifact.
 
-## Publication boundary
+### Publication boundary (legacy)
 
 The repository contains no account token, license material, user directory,
 paper PDF, manuscript, surrogate dataset, OOD confirmation data or prior
 controller result.
 
-## Nominal reference-feasibility artifacts
+### Nominal reference-feasibility artifacts (legacy)
 
 `results/targeted_lqr_weak_rebuild_v1/reference_feasibility_v1/` contains the
 first 120-case nominal screen. It is superseded because its low-speed load
@@ -68,7 +92,7 @@ It does not reuse either LQR model-selection bank and does not open OOD/test
 data. Its output is diagnostic LQR-only evidence; no NMPC teacher outcome is
 used to select a weak context at this stage.
 
-## Strong-LQR selection artifact
+### Strong-LQR selection artifact (legacy)
 
 The manual LQR workflow rebuilds independent design and selection banks from
 seeds `300830801` and `300830901`. It evaluates 125 coarse candidates, 125

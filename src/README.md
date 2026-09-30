@@ -2,11 +2,13 @@
 
 Code MATLAB chính của dự án.
 
-- `plant/`: plant 12-state theo phương pháp mới.
-- `controllers/`: fixed NMPC và scenario/uncertain NMPC teacher.
-- `rl/`: environment và policy tune `Q`, `R`, `N`.
-- `learning/`: surrogate, residual NN và confidence estimator.
-- `common/`: tiện ích chung.
-- `metrics/`: metric và báo cáo.
+- `joint/`: **phương pháp D1 (đang dùng)** — mọi định nghĩa dùng chung của pipeline huấn luyện
+  và đánh giá cuối (xem `joint/README.md`, `docs/D1_method.pdf`).
+- `plant/`: plant 12-state (D1 dùng `quad_dynamics`, `quad_step_rk4`).
+- `common/`: tiện ích chung (D1 dùng các hàm sinh/hoàn thiện quỹ đạo tham chiếu).
+- `analysis/`: D1 dùng `d1_finite_horizon_contraction` (nhãn c_LQR).
+- `learning/surrogate/`: D1 dùng `surrogate_build_feature` (đầu vào 208 chiều).
+- `controllers/`, `rl/`, `learning/confidence/`, `learning/residual/`, `metrics/`: thuộc
+  **pipeline cũ** (trước D1, xem `docs/legacy_pipeline.md`); D1 không dùng.
 
 Không để script nháp, figure xuất tạm, hoặc dữ liệu sinh ra trong `src/`.
