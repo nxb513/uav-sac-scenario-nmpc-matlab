@@ -394,7 +394,8 @@ ràng buộc góc, tốc độ góc hay độ nghiêng.
 từng kịch bản). Kiểu NLP chọn qua \texttt{D1\_SOLVER}: \texttt{SQP} (mặc định, dùng cho mọi run huấn luyện
 và đánh giá; $\le50$ vòng, tìm kiếm đường merit) hoặc \texttt{SQP\_RTI} (1 vòng, tuỳ chọn). QP: HPIPM partial
 condensing ($N_{\mathrm{cond}}=5$, $\le100$ vòng), Hessian Gauss--Newton, Levenberg--Marquardt $10^{-3}$.
-$N=20,\ N_c=5,\ M=5$ cố định.
+$N=20,\ N_c=5,\ M=5$ cố định. Mọi job (huấn luyện, resume, đánh giá) build acados tại cùng một commit
+ghim sẵn (\texttt{3edf4435e7}), nên solver không đổi phiên bản giữa chừng một chain.
 \item Mỗi bước (\texttt{d1\_teacher\_step}): lực $F_k$ đặt vào tham số của mọi stage $0..N$; tham chiếu nhất
 quán với gió $(\bar x_{k..k+N},\bar u_{k..k+N-1})$ cho mọi kịch bản; trạng thái đầu
 $[x_k;\dots;x_k;\,u_{\mathrm{prev}}]$; giải một lần. Lời giải \emph{dùng được} khi solver trả status $0$
@@ -829,7 +830,7 @@ Số kịch bản robust & $M$ & $5$\\
 Cửa sổ co rút & $H$ & $20$ bước ($1.0$ s)\\
 Trọng số cuối kỳ & $Q_f$ & $Q_0$ (Bryson), cố định, SAC không chỉnh\\
 Phạt $\delta u$ & $dU$ & $0$\\
-Solver NLP & -- & \texttt{SQP} ($\le50$ vòng; mặc định, dùng cho mọi run) / \texttt{SQP\_RTI} (tuỳ chọn)\\
+Solver NLP & -- & \texttt{SQP} ($\le50$ vòng; mặc định, dùng cho mọi run) / \texttt{SQP\_RTI} (tuỳ chọn); acados ghim commit \texttt{3edf443}\\
 Thông tin gió của teacher & $F_k$ & lực gió hiện tại (đặc quyền), giữ không đổi trên tầm dự báo\\
 Tham chiếu của teacher & $(\bar x,\bar u)$ & flatness danh nghĩa với lực đẩy $m(a+ge_3)+D_vv-F_k$\\
 Áp nghiệm teacher & -- & status $0$ hoặc $2$ và hữu hạn; nếu không: giữ lệnh cũ, đặt lại solver\\

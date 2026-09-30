@@ -140,6 +140,8 @@ jobs:
       D1_CKPT_EVERY_ITER: ${{ inputs.ckpt_every }}
       D1_SOLVER: ${{ inputs.solver }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
+      # acados commit used by every D1 job (training and final evaluation)
+      ACADOS_COMMIT: 3edf4435e7d88d8a4d1c5c3a4f613f032aae658f
     steps:
       - name: Check out research package
         uses: actions/checkout@v6
@@ -153,24 +155,28 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.resume_run_id }}
-        continue-on-error: true
 
       - name: Set resume flag
         run: |
           if [ -n "${{ inputs.resume_run_id }}" ]; then
+            # a resume must continue the chain: never fall back to a fresh start
+            test -f "results/d1_joint/seed${{ matrix.seed }}/checkpoint_seed${{ matrix.seed }}.mat" \
+              || { echo "resume requested but no checkpoint for seed ${{ matrix.seed }}"; exit 1; }
             echo "D1_RESUME=1" >> "$GITHUB_ENV"
           else
             echo "D1_RESUME=0" >> "$GITHUB_ENV"
           fi
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake build-essential git unzip wget
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential git unzip wget gdb
 
-      - name: Clone and build acados
+      - name: Clone and build acados (pinned)
         run: |
           set -euxo pipefail
+          # every job of every chain uses the SAME acados version
           git clone https://github.com/acados/acados.git "$GITHUB_WORKSPACE/acados"
           cd "$GITHUB_WORKSPACE/acados"
+          git checkout "$ACADOS_COMMIT"
           git submodule update --recursive --init
           mkdir -p build && cd build
           cmake -DACADOS_WITH_QPOASES=ON -DACADOS_INSTALL_DIR="$GITHUB_WORKSPACE/acados" ..
@@ -199,6 +205,11 @@ jobs:
             Statistics_and_Machine_Learning_Toolbox
           cache: true
 
+      - name: Start hang watchdog (diagnostics only)
+        run: |
+          nohup bash tools/ci/hang_watchdog.sh "$D1_RUN_DIR" 1800 > "$RUNNER_TEMP/hang_watchdog.log" 2>&1 &
+          echo "watchdog started"
+
       - name: Run joint pipeline (seed ${{ matrix.seed }})
         timeout-minutes: 340
         uses: matlab-actions/run-command@v3
@@ -210,6 +221,10 @@ jobs:
             addpath(fullfile(getenv('ACADOS_INSTALL_DIR'),'interfaces','acados_matlab_octave'));
             addpath(genpath('src')); addpath('configs'); addpath('experiments');
             run_d1_joint_pipeline;
+
+      - name: Show hang watchdog log
+        if: always()
+        run: cat "$RUNNER_TEMP/hang_watchdog.log" || true
 
       - name: Upload checkpoint
         if: always()

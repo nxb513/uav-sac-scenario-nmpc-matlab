@@ -68,6 +68,13 @@ pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `selec
   (`Teacher,P`) and `base_ctrls` (`LQR,LQI,MPC`). It writes CSVs, representative
   trajectories and a Markdown summary.
 
+Both D1 workflows build acados at the pinned commit `3edf4435e7d88d8a4d1c5c3a4f613f032aae658f`
+(CasADi 3.6.7), so every job of every chain uses the same solver. A resume fails if the
+checkpoint cannot be downloaded; it never silently restarts a chain. A diagnostic watchdog
+(`tools/ci/hang_watchdog.sh`) watches the training step. If no checkpoint is written for 30
+minutes, it saves the stacks of the MATLAB process (`hang_backtrace_*.txt` in the artifact)
+and stops the step, so the last checkpoint is uploaded. It never changes the training itself.
+
 Other `matlab-*.yml` workflows belong to the legacy pipeline.
 
 ## Data
