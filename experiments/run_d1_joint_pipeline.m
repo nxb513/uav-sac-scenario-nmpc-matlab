@@ -428,7 +428,7 @@ uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];
 xN = Xref(:,1); xL = Xref(:,1); uprev = uh;
 stateHist = repmat(xN,1,4); inputHist = repmat(uh,1,4);
 posErrN = zeros(T,1); duAcc = 0; okN = 0; cViol = 0; prevU = uh;
-diverged = false; kdone = T;
+diverged = false; kdone = T; tCase = tic; nSt = [0 0 0];     % teacher status counts: conv / max-iter / failed
 EL = zeros(12, T+1); EL(:,1) = xL - Xref(:,1);       % LQR error traj for c_L
 usat_lo = [0;-0.5;-0.5;-0.25]; usat_hi = [cfg.plant.Tmax;0.5;0.5;0.25];
 teacher_reset(teacher, Xref, 1, uh, cfg);            % clean solver memory for EVERY case
@@ -440,6 +440,7 @@ for k = 1:T
     okStatus = (status == 0);                        % true SQP convergence (diagnostic)
     uN = min(max(uN, usat_lo), usat_hi);
     okN = okN + okStatus; uprev = uN;
+    nSt = nSt + [status == 0, status == 2, ~usable];
     % stream RESIDUAL label Delta_u* = u_teacher - u_LQR(same state xN); genuine NMPC only
     if usable && all(isfinite(stateHist(:))) && all(isfinite(inputHist(:)))
         refLook = Xref(:, k:k+10);
@@ -452,7 +453,11 @@ for k = 1:T
         end
     end
     % advance NMPC plant + histories (real time so the time-varying wind acts)
-    xNnext = quad_step_rk4((k-1)*Ts, xN, uN, Ts, theta, ds);
+    try
+        xNnext = quad_step_rk4((k-1)*Ts, xN, uN, Ts, theta, ds);
+    catch                                            % singular attitude (pitch = +-90 deg) = divergence
+        xNnext = nan(12,1);
+    end
     stateHist = [stateHist(:,2:end), xN];
     inputHist = [inputHist(:,2:end), uN];
     duAcc = duAcc + sum((uN-prevU).^2); prevU = uN; xN = xNnext;
@@ -464,7 +469,11 @@ for k = 1:T
     % ---- LQR paired branch (own plant copy) --------------------------------
     uL = uh - lqr.K*(xL - Xref(:,k));
     uL = min(max(uL,[0;-0.5;-0.5;-0.25]),[cfg.plant.Tmax;0.5;0.5;0.25]);
-    xL = quad_step_rk4((k-1)*Ts, xL, uL, Ts, theta, ds);
+    try
+        xL = quad_step_rk4((k-1)*Ts, xL, uL, Ts, theta, ds);
+    catch
+        xL = nan(12,1);
+    end
     EL(:,k+1) = xL - Xref(:,k+1);
 end
 % reward from NMPC KPIs (negative cost; lower error/failure = higher reward).
@@ -483,6 +492,8 @@ catch
     cLdata = [];
 end
 if isempty(cLdata), cLdata = zeros(0,1); end
+fprintf('  CASE %-26s steps=%4d conv=%.2f maxit=%.2f fail=%.2f diverged=%d t=%.0fs\n', ...
+    kase.groupId, kdone, nSt/max(kdone,1), diverged, toc(tCase));
 end
 
 % ---- surrogate (2-head: residual Delta_u + confidence c_S) ------------------
@@ -1107,7 +1118,11 @@ for ci = 1:numel(sel)
         u = min(max(uLk + du, lo), hi);                  % alpha = 1
         feats(:,k) = single(feat) ./ sur.featScale;
         stateHist = [stateHist(:,2:end), x]; inputHist = [inputHist(:,2:end), u];
-        x = quad_step_rk4((k-1)*Ts, x, u, Ts, theta, ds);
+        try
+            x = quad_step_rk4((k-1)*Ts, x, u, Ts, theta, ds);
+        catch                                        % singular attitude = divergence
+            break;
+        end
         if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
         perr(k) = norm(x(1:3) - Xref(1:3,k+1)); nok = k;
     end
@@ -1199,7 +1214,11 @@ x = Xref(:,1); X = nan(12,T);
 if cfg.windOn, ds = sample_wind(cfg, T); else, ds = []; end   % same wind law as training
 for k = 1:T
     u = uh - lqr.K*(x - Xref(:,k)); u = min(max(u,lo),hi);
-    x = quad_step_rk4((k-1)*Ts, x, u, Ts, theta, ds); X(:,k) = x;
+    try
+        x = quad_step_rk4((k-1)*Ts, x, u, Ts, theta, ds); X(:,k) = x;
+    catch                                            % singular attitude = divergence
+        break;
+    end
     if ~all(isfinite(x)) || norm(x(1:3)) > 1e4, break; end
 end
 Tv = find(all(isfinite(X),1), 1, 'last'); if isempty(Tv), Tv = 1; end
