@@ -1,9 +1,10 @@
 name: D1 joint pipeline (5 seeds)
 
-# ONE integrated task per seed: SAC tunes NMPC Q,R -> acados teacher (privileged
-# wind) + paired LQR -> streaming residual surrogate -> c_S / c_LQR consolidation
-# -> checkpoint. Open-ended (runs until wall_seconds or stop_iter, checkpoints,
-# resume to continue). Code: experiments/run_d1_joint_pipeline.m + src/joint/d1_*.m;
+# ONE task per seed. SAC phase: SAC tunes the NMPC Q,R of the acados teacher (privileged
+# wind) on paired teacher/LQR rollouts -> checkpoint. DAgger phase (dagger=1): frozen
+# teacher -> linear student by DAgger -> c_S / c_LQR -> student file. Open-ended (runs
+# until wall_seconds or stop_iter, checkpoints, resume to continue).
+# Code: experiments/run_d1_joint_pipeline.m + src/joint/d1_*.m;
 # method: docs/D1_method.pdf.
 
 on:
@@ -30,12 +31,12 @@ on:
         default: "0"
         type: string
       surr_eval:
-        description: "1 = evaluate trained surrogate closed-loop (needs resume_run_id)"
+        description: "1 = evaluate the student (alpha=1) and the blend, teacher-free (needs a run with the student file)"
         required: false
         default: "0"
         type: string
       compare:
-        description: "1 = compare LQR vs teacher-NMPC vs proposed blend (needs resume_run_id)"
+        description: "1 = compare LQR / teacher / student alpha=1 / blend (needs a run with the student file)"
         required: false
         default: "0"
         type: string
@@ -45,7 +46,7 @@ on:
         default: "0"
         type: string
       consolidate:
-        description: "1 = train c_S and c_LQR = P(next H contract) from checkpoint (needs resume_run_id)"
+        description: "1 = recompute c_S and c_LQR of an existing student file (teacher-free)"
         required: false
         default: "0"
         type: string
@@ -105,9 +106,19 @@ on:
         default: "1"
         type: string
       ckpt_every:
-        description: "Save a frozen milestone checkpoint (+ confidences) every N SAC iterations (0 = off)"
+        description: "Save a frozen milestone SAC checkpoint every N SAC iterations (0 = off)"
         required: false
         default: "50"
+        type: string
+      dagger:
+        description: "1 = DAgger phase: learn the linear student from the frozen teacher of the checkpoint in resume_run_id"
+        required: false
+        default: "0"
+        type: string
+      ckpt_suffix:
+        description: "Which SAC checkpoint DAgger/modes use: empty = checkpoint_seed<s>.mat, _iter0500 = milestone"
+        required: false
+        default: ""
         type: string
 
 jobs:
@@ -138,6 +149,8 @@ jobs:
       D1_STOP_ITER: ${{ inputs.stop_iter }}
       D1_WIND: ${{ inputs.wind }}
       D1_CKPT_EVERY_ITER: ${{ inputs.ckpt_every }}
+      D1_DAGGER: ${{ inputs.dagger }}
+      D1_CKPT_SUFFIX: ${{ inputs.ckpt_suffix }}
       D1_SOLVER: ${{ inputs.solver }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.seed }}
       # acados commit used by every D1 job (training and final evaluation)
@@ -207,7 +220,7 @@ jobs:
 
       - name: Start hang watchdog (diagnostics only)
         run: |
-          nohup bash tools/ci/hang_watchdog.sh "$D1_RUN_DIR" 1800 > "$RUNNER_TEMP/hang_watchdog.log" 2>&1 &
+          nohup bash tools/ci/hang_watchdog.sh "$D1_RUN_DIR" 3600 > "$RUNNER_TEMP/hang_watchdog.log" 2>&1 &
           echo "watchdog started"
 
       - name: Run joint pipeline (seed ${{ matrix.seed }})

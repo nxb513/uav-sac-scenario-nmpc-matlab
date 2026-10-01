@@ -30,18 +30,30 @@ cfg.logMultBounds = [10^(-cfg.logMultDec), 10^(cfg.logMultDec)];
 % Bryson in BOTH (fixed yardstick).
 cfg.randomQR = strcmp(d1_getenv_str('D1_RANDOM_QR','0'),'1');
 cfg.rqrLog   = [-2, 2];                              % random base: 10^[-2,2] per weight
-% surrogate (2-head: residual Delta_u + confidence c_S)
-cfg.surHidden = 128; cfg.surLR = 1e-3; cfg.surBatch = 256;
-cfg.surBufferCap = 1e5; cfg.surRecentFrac = 0.5;
-cfg.resHalf = cfg.uHi - cfg.uLo;                     % residual normalization = actuator range
+% teacher solve time limit (acados timeout_max_time, SQP): a solve that exceeds it ends with
+% status 7 (ACADOS_TIMEOUT) = unusable. Normal solves take a small fraction of it.
+cfg.solveTimeout = 2.0;                              % [s]
+% linear student Du = W*phi (d1_student_feature, 27 features, no bias) learned by DAgger
+cfg.nPhi = 27;
+cfg.resHalf = cfg.uHi - cfg.uLo;                     % target normalization = actuator range
+cfg.daggerIters = d1_getenv_num('D1_DAGGER_ITERS', 10);   % N_D DAgger iterations (budget)
+cfg.daggerCases = cfg.casesPerEval;                  % flights per DAgger iteration (= SAC iteration)
+cfg.ridgeGrid = 10.^(-6:2);                          % ridge lambda grid (standardized features)
+cfg.cvFolds = 5;                                     % case-grouped cross-validation folds
+cfg.valSeedOffset = 7700;                            % validation winds: RandStream(seed + 7700)
+cfg.daggerSeedOffset = 9900;                         % DAgger case/wind draws: rng(seed + 9900)
+cfg.alphaGrid = 0:0.001:1;                           % stability check grid
 % blend / confidence design params (fixed, disclosed)
 cfg.epsP   = d1_getenv_num('D1_EPS_P',  0.5);        % c_S error scale (m): s=exp(-(RMS/epsP)^2)
 cfg.cLow   = d1_getenv_num('D1_C_LOW',  0.3);        % g_L gate low threshold on c_LQR
 cfg.cHigh  = d1_getenv_num('D1_C_HIGH', 0.7);        % g_L gate high threshold on c_LQR
 cfg.epsSafe= d1_getenv_num('D1_EPS_SAFE', 0.1);      % Lyapunov safeguard margin (alpha_safe mode)
 cfg.alphaSafe = strcmp(d1_getenv_str('D1_ALPHA_SAFE','0'),'1');
-cfg.csCasesPerCall = d1_getenv_num('D1_CS_CASES', 40);  % surrogate closed-loop cases for c_S labels
-cfg.csEpochs = d1_getenv_num('D1_CS_EPOCHS', 300);
+cfg.csCases = 40;                                    % student alpha=1 flights for the c_S labels
+cfg.cLqrCases = 60;                                  % LQR flights for the c_LQR labels
+% which SAC checkpoint the student belongs to: '' = checkpoint_seed<s>.mat,
+% '_iter0500' = milestone checkpoint_seed<s>_iter0500.mat (student file gets the same suffix)
+cfg.ckptSuffix = d1_getenv_str('D1_CKPT_SUFFIX', '');
 % sac
 cfg.sacLR = 3e-4; cfg.sacBatch = 256; cfg.sacBufferCap = 5e4;
 cfg.sacGamma = 0.0;                                  % 1-step bandit (done each ep)

@@ -2,7 +2,7 @@ name: D1 final evaluation (real wind, train / OOD)
 
 # LQR, LQI, linear MPC (chain-independent, job "baseline") and, per SAC chain, the
 # SAC-NMPC teacher (acados; ORACLE: told the exact current wind force, not deployable)
-# and the proposed controller P (deployed pair; does not know the wind), all flown on
+# and the proposed controller P (DAgger student + confidences; does not know the wind), all flown on
 # the same flights: real wind (Neural-Fly force + SWUF-3D field wind) x train / OOD
 # plants x 5 trajectory families. Every controller knows only the nominal model.
 # Code: experiments/d1_final_eval.m (+ src/joint/d1_*.m shared with training).
@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       chains:
-        description: 'JSON list of chains [{"seed":..,"rqr":0|1,"dec":..,"run":"<run id holding the checkpoint artifact>","suffix":"_iter0500"}] (suffix selects a milestone file; no default: pick the checkpoints explicitly)'
+        description: 'JSON list of chains [{"seed":..,"rqr":0|1,"dec":..,"run":"<DAgger run id: its artifact holds the SAC checkpoint and the student file>","suffix":"_iter0500"}] (suffix selects the milestone; no default)'
         required: true
         type: string
       conds:
@@ -98,7 +98,7 @@ jobs:
       D1_CTRLS: ${{ inputs.chain_ctrls }}
       D1_TAG: c${{ matrix.chain.seed }}
       D1_CKPT: ${{ github.workspace }}/ckpt/checkpoint_seed${{ matrix.chain.seed }}${{ matrix.chain.suffix || '' }}.mat
-      D1_CONF: ${{ github.workspace }}/ckpt/conf_seed${{ matrix.chain.seed }}${{ matrix.chain.suffix || '' }}.mat
+      D1_STUDENT: ${{ github.workspace }}/ckpt/student_seed${{ matrix.chain.seed }}${{ matrix.chain.suffix || '' }}.mat
       D1_WIND_DIR: ${{ github.workspace }}/wind/series
       D1_OUT: ${{ github.workspace }}/results/final_eval
     steps:

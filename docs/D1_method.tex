@@ -47,6 +47,7 @@
 \setlength{\parindent}{0pt}
 
 \begin{document}
+\sloppy
 
 % ===================== TITLE =====================
 \begin{titlepage}
@@ -54,15 +55,15 @@
 \vspace*{3cm}
 {\color{navy}\Huge\bfseries Phương pháp D1\par}
 \vspace{0.8cm}
-{\LARGE\bfseries Điều khiển lai cho UAV: LQR nền + NMPC-scenario chưng cất,\\[2mm]
-với tin cậy $\cS$ (surrogate tự đoán chất lượng bám) và $\cL$ (co rút LQR)\par}
+{\LARGE\bfseries Điều khiển lai cho UAV: LQR nền + học trò tuyến tính\\[2mm]
+chưng cất bằng DAgger từ NMPC-scenario, với tin cậy $\cS$ và $\cL$\par}
 \vspace{1.2cm}
 {\large\itshape Tài liệu trình bày phương pháp — bản đầy đủ để kiểm tra\par}
 \vspace{2.5cm}
 \begin{minipage}{0.85\textwidth}\centering
 Bản ghi rõ: mô hình, tham số danh nghĩa, điều kiện bất định và nhiễu, tập quỹ đạo (họ, tốc độ,
 gia tốc), thiết kế LQR (Bryson), teacher NMPC-scenario $M{=}5$ được biết gió (thông tin đặc quyền), SAC
-tinh chỉnh $Q,R$ khởi tạo Bryson, surrogate chưng cất (tự suy ra nhiễu từ phần dư dự báo), định nghĩa
+tinh chỉnh $Q,R$ khởi tạo Bryson, học trò tuyến tính có chi phí ngang LQR học bằng DAgger, định nghĩa
 $\cS/\cL$, bộ điều khiển đề xuất (trộn theo tin cậy), phân tích co rút Lyapunov (điều kiện đủ), môi trường
 huấn luyện có gió ngẫu nhiên, và giao thức đánh giá. Mọi mô tả khớp với mã nguồn hiện tại: các định nghĩa
 dùng chung nằm trong \texttt{src/joint/d1\_*.m}, được cả pipeline huấn luyện
@@ -75,81 +76,57 @@ dùng chung nằm trong \texttt{src/joint/d1\_*.m}, được cả pipeline huấ
 
 % ===================== 0 =====================
 \section{Tóm tắt phương pháp}
-\noindent\fbox{\parbox{0.97\textwidth}{\small\textbf{Trạng thái (2026-10-01).}
-(i) Tài liệu này mô tả đúng code hiện tại: huấn luyện \texttt{fa8e9e6}, CI \texttt{6aacc86}.
-(ii) Huấn luyện đang tạm dừng vì sự cố solver đã chẩn đoán (Mục 7, ``Sự cố đã biết'').
-(iii) Đã duyệt hướng thay surrogate MLP bằng \textbf{học trò tuyến tính có chi phí ngang LQR, học bằng DAgger sau SAC}
-(\texttt{docs/D1\_student\_design.pdf}; chi tiết đang chờ duyệt, \textbf{chưa có trong code}). Khi code đổi, các Mục 2, 8, 9,
-10, 11, 13 và 14 sẽ được viết lại cho khớp code.}}
-
 Mục tiêu: xây một \textbf{bộ điều khiển triển khai} cho UAV quadrotor \textbf{không cần giải tối ưu
-trực tuyến}, nhưng vẫn thừa hưởng chất lượng của một bộ \textbf{NMPC-scenario} mạnh và lấy \textbf{LQR làm
-nền} (phần dư chỉ bổ sung có kiểm soát; phân tích co rút là \emph{điều kiện đủ có điều kiện}, không phải
-bảo chứng ổn định cho luật lai --- xem Mục 12). Kiến trúc gồm ba thành phần và một luật hợp nhất:
+trực tuyến} và có \textbf{chi phí tính toán ngang LQR}, nhưng vẫn thừa hưởng chất lượng của một bộ
+\textbf{NMPC-scenario} mạnh, lấy \textbf{LQR làm nền} (phần dư chỉ bổ sung có kiểm soát; phân tích co rút là
+\emph{điều kiện đủ có điều kiện}, không phải bảo chứng ổn định cho luật lai --- xem Mục 12). Kiến trúc gồm
+ba thành phần và một luật hợp nhất:
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
 \item \textbf{LQR nền} — thiết kế theo phương pháp chuẩn (tuyến tính hoá quanh hover + Riccati rời rạc),
 trọng số theo \textbf{quy tắc Bryson}. Cho ma trận Lyapunov $P$ và bộ điều khiển ổn định vùng.
-\item \textbf{Teacher = NMPC-scenario ($M{=}5$)} — bộ NMPC bền vững chạy ngoại tuyến để sinh nhãn điều
-khiển. \textbf{SAC} tinh chỉnh trọng số $Q,R$ của NMPC, \textbf{khởi tạo từ Bryson} để kết quả tốt ngay.
-Teacher được \textbf{biết lực gió hiện tại} (thông tin đặc quyền, chỉ có trong mô phỏng): lực này vào mô hình
-dự báo và vào tham chiếu nhất quán với gió (Mục 7). Teacher không được triển khai.
-\item \textbf{Surrogate chưng cất} — mạng nơ-ron nhìn lịch sử trạng thái (gồm trạng thái hiện tại)/lệnh,
-tham chiếu phía trước và \textbf{phần dư dự báo một bước} của mô hình danh nghĩa (không nhìn $Q,R$, \textbf{không
-biết gió}), \emph{đồng thời đoán phần dư điều khiển $\Delta u=u_{\mathrm{teacher}}-\mathrm{sat}(\uL)$ và tự
-đoán tin cậy $\cS$} (hai đầu ra chung một mạng; chỉ học phần teacher làm KHÁC LQR). Gió mà teacher được
-biết, surrogate phải tự suy ra từ phần dư dự báo (Mục 9).
-\item \textbf{Tin cậy $\cS,\cL$} — $\cS$ (do surrogate đoán, KHÔNG dùng $V$) là \emph{điểm chất lượng bám
-vị trí gần đây} (RMS sai số 20 bước vừa qua, chuẩn hoá về $[0,1]$); $\cL$ là \emph{xác suất co rút} của
-LQR (dựa trên hàm Lyapunov $V$).
+\item \textbf{Teacher = NMPC-scenario ($M{=}5$)} — bộ NMPC bền vững chạy ngoại tuyến. \textbf{SAC} tinh chỉnh
+trọng số $Q,R$ của NMPC, \textbf{khởi tạo từ Bryson}. Teacher được \textbf{biết lực gió hiện tại} (thông tin
+đặc quyền, chỉ có trong mô phỏng): lực này vào mô hình dự báo và vào tham chiếu nhất quán với gió (Mục 7).
+Teacher không được triển khai.
+\item \textbf{Học trò tuyến tính} — $\Delta u=W\varphi$ với 27 đặc trưng rẻ $\varphi$ (sai số trạng thái, lực ngoài
+ước lượng $\hat F$, feedforward và nhìn trước của tham chiếu), \textbf{không biết gió} (dùng $\hat F$ ước lượng
+từ bước trước). $W$ được học bằng \textbf{DAgger} (Ross et al. 2011) với teacher \emph{đóng băng} sau SAC,
+mỗi vòng giải \textbf{ridge dạng đóng} (Mục 9). Chi phí $\approx108$ phép nhân-cộng, cùng bậc với LQR (48).
+\item \textbf{Tin cậy $\cS,\cL$} — $\cS$ là \emph{điểm chất lượng bám vị trí gần đây} của học trò (RMS sai số 20
+bước vừa qua, chuẩn hoá về $[0,1]$), dự đoán bằng logistic trên đặc trưng rẻ; $\cL$ là \emph{xác suất co rút}
+của LQR (dựa trên hàm Lyapunov $V$).
 \end{itemize}
 Luật triển khai (không giải NMPC trực tuyến), dạng \emph{LQR $+$ phần dư có cổng}:
 \[
-u \;=\; \mathrm{sat}_{\mathcal U}\!\big(\mathrm{sat}_{\mathcal U}(\uL) + \alpha\,\Delta u\big), \qquad
+u \;=\; \mathrm{sat}_{\mathcal U}\!\big(\mathrm{sat}_{\mathcal U}(\uL) + \alpha\,W\varphi\big), \qquad
 \alpha \;=\; \cS\cdot g_L(\cL),
 \]
-với $\Delta u$ (phần dư teacher $-$ LQR đã bão hoà) do surrogate đoán, $\mathrm{sat}_{\mathcal U}$ là chặn biên
-actuator (nền LQR được bão hoà trước, đúng như trong nhãn, nên $\alpha=1$ với $\Delta u$ chính xác tái tạo
-đúng lệnh teacher), và $g_L$ là \textbf{cổng do tin cậy LQR điều khiển} (Mục 11). \textbf{LQR được ưu tiên}: khi LQR
-tự tin thì $g_L\to0$ nên $u\approx\uL$; residual chỉ hoạt động mạnh khi \emph{LQR kém tin ($g_L$ lớn) VÀ
-surrogate đáng tin ($\cS$ cao)}. Nếu cả hai cùng cao $\Rightarrow$ vẫn thuần LQR.
+với $W\varphi$ xấp xỉ phần dư teacher $-$ LQR đã bão hoà, $\mathrm{sat}_{\mathcal U}$ là chặn biên actuator (nền
+LQR được bão hoà trước, đúng như trong nhãn), và $g_L$ là \textbf{cổng do tin cậy LQR điều khiển} (Mục 11).
+\textbf{LQR được ưu tiên}: khi LQR tự tin thì $g_L\to0$ nên $u\approx\uL$; phần dư chỉ hoạt động mạnh khi
+\emph{LQR kém tin ($g_L$ lớn) VÀ học trò đáng tin ($\cS$ cao)}.
 
 % ===================== 1 =====================
 \section{Kiến trúc tổng thể}
-Một lần huấn luyện cho mỗi hạt giống (seed) gồm \textbf{hai khối offline}. Khối A (SAC $+$ chưng cất
-residual) chạy \emph{đồng thời} --- KHÔNG đóng băng $Q,R$: surrogate không nhìn $Q,R$ (đầu vào $z_k$,
-Mục 9) nên học một ánh xạ $z\to\Delta u$ trên nhãn của mọi $Q,R$ mà SAC thử, \emph{kể cả trường hợp xấu};
-buffer vòng $10^5$ mẫu ($\approx5$ iter gần nhất), mỗi minibatch lấy $50\%$ từ nhãn của 3 iter gần nhất.
-Những vùng surrogate bám kém sẽ được $\cS$ tự hạ thấp. Khối B chạy tự động sau vòng SAC ở cuối mỗi run
-(hoặc riêng bằng \texttt{D1\_CONSOLIDATE=1}), và tại mỗi \emph{mốc checkpoint} (mặc định mỗi $50$ iter,
-Mục 8): huấn luyện đầu $\cS$ (trên một \emph{bản sao} của surrogate) và bộ phân loại $\cL$; tách khỏi Khối A
-để tránh vòng phụ thuộc $\alpha\leftrightarrow\cS$. Khối B \textbf{không bao giờ sửa checkpoint huấn luyện}:
-kết quả (\texttt{conf} và surrogate đã hiệu chỉnh đầu $\cS$) được ghi \emph{cùng nhau} vào file
-\texttt{conf\_seed<s>[\_iter<NNNN>].mat}; cặp này là bộ điều khiển triển khai. Nhờ vậy mọi lần chạy Khối B đều
-xuất phát từ cùng trạng thái của surrogate huấn luyện, không phụ thuộc cách chuỗi được chia thành các job. Mọi
-lượt bay dùng để huấn luyện (cả hai khối) đều có \textbf{gió ngẫu nhiên} (Mục 4).
+Mỗi hạt giống (seed) là một \textbf{chain} gồm \textbf{hai pha offline nối tiếp}, chạy bằng cùng một commit:
 \begin{center}\small
-\begin{tabular}{@{}p{3.4cm} p{4.2cm} p{6.6cm}@{}}
+\begin{tabular}{@{}p{3.3cm} p{5.0cm} p{6.0cm}@{}}
 \toprule
-\textbf{Khối} & \textbf{Bộ điều khiển bay} & \textbf{Dữ liệu thu}\\
+\textbf{Pha} & \textbf{Ai bay} & \textbf{Kết quả}\\
 \midrule
-A. SAC $+$ residual (đồng thời) & NMPC teacher (SAC tune $Q,R$; biết gió hiện tại) $+$ LQR song song,
-cùng một mẫu gió & reward cho SAC; nhãn phần dư $\Delta u^*=u_T-\mathrm{sat}(\uL)$ (đầu $\Delta u$); nhánh
-LQR song song chỉ để chẩn đoán\\
-B. Huấn luyện $\cS$ và $\cL$ & LQR $+$ residual NN, \textbf{$\alpha=1$} (40 quỹ đạo); LQR thuần (60 quỹ
-đạo); mỗi quỹ đạo một mẫu gió & RMS sai số bám 20 bước vừa qua $\Rightarrow$ nhãn $s_k$ (đầu $\cS$); $\Delta V_H<0$ của LQR
-$\Rightarrow$ nhãn $\cL$\\
+1. SAC (iter $1..500$) & teacher (SAC thử $Q,R$; biết gió) $+$ LQR song song, cùng một mẫu gió & reward cho SAC;
+checkpoint SAC (= teacher); mốc mỗi 50 iter. \textbf{Không} học học trò trong pha này\\
+2. DAgger (teacher đóng băng) & vòng 1: teacher; vòng $\ge2$: học trò ($\alpha=1$), teacher chỉ được \emph{hỏi} & dữ
+liệu gộp, các ứng viên $W_i$, chọn $W^\star$ trên tập kiểm định, rồi $\cS$, $\cL$ $\to$ file học trò\\
 \bottomrule
 \end{tabular}
 \end{center}
-\textbf{Tránh vòng phụ thuộc.} Ở Khối B, $\cS$ chưa đáng tin khi mới học, nên \emph{không} dùng ngay $\cS$
-để quyết $\alpha$ rồi lấy kết quả đó dạy lại $\cS$. Thay vào đó cho nhánh residual chạy với \textbf{luật
-cố định $\alpha=1$}: $u_k=\mathrm{sat}_{\mathcal U}(\mathrm{sat}_{\mathcal U}(\uL)+\widehat{\Delta u}_k)$, thu
-$(z_k,s_k)$ để huấn luyện đầu $\cS$ (đóng băng thân mạng $+$ đầu $\Delta u$).
-
-Toàn bộ trạng thái lưu \textbf{checkpoint}; ngoài file checkpoint chạy (ghi đè), mã lưu thêm các
-\textbf{checkpoint mốc} cố định tại iter $50,100,\dots$ kèm tin cậy riêng của mốc đó, và có thể dừng đúng
-tại một iter chỉ định (Mục 8). Khi triển khai chỉ còn LQR (rẻ) $+$ surrogate (một lần suy luận) $+$ hai tin
-cậy; \textbf{không} giải NMPC --- chi phí ở mức LQR, chất lượng hướng tới NMPC.
+Tách hai pha vì định lý của DAgger cần \textbf{chuyên gia cố định}: trong lúc SAC còn đổi $Q,R$ thì teacher
+còn thay đổi. Pha 2 chạy trên checkpoint chỉ định (\texttt{D1\_DAGGER=1}, \texttt{D1\_CKPT\_SUFFIX}, ví dụ mốc
+\texttt{\_iter0500}) và ghi \texttt{student\_seed<s><suffix>.mat} ($W^\star$ $+$ tin cậy) --- đây là bộ điều khiển
+triển khai. Hai pha đều \textbf{resume được}: pha 1 đến mức từng quỹ đạo (Mục 8), pha 2 đến mức từng chuyến bay
+(file trạng thái \texttt{dagger\_seed<s><suffix>.mat}). Mọi lượt bay dùng để học đều có \textbf{gió ngẫu nhiên}
+(Mục 4). Khi triển khai chỉ còn LQR $+$ $W\varphi$ $+$ hai logistic; \textbf{không} giải NMPC.
 
 % ===================== 2 =====================
 \section{Mô hình quadrotor 12 trạng thái}
@@ -183,13 +160,14 @@ Giới hạn mô-men & $\tau$ & $\pm0.5\,;\ \pm0.5\,;\ \pm0.25$ & N$\cdot$m\\
 \textbf{Môi trường huấn luyện (đúng theo mã hiện tại).} Mọi lượt bay dùng để huấn luyện chạy trên
 \textbf{plant danh nghĩa} chịu \textbf{gió ngẫu nhiên} (bên dưới), \textbf{không có nhiễu cảm biến}, phản hồi
 đủ trạng thái, trạng thái đầu nằm đúng trên quỹ đạo tham chiếu, thời gian thực $t=(k-1)T_s$ được truyền
-vào plant để gió thay đổi theo thời gian. Điều này áp dụng cho rollout cặp teacher/LQR (reward SAC, nhãn
-residual; Khối A) và cho rollout surrogate $\alpha=1$ (nhãn $\cS$) cùng rollout LQR (nhãn $\cL$) ở Khối B.
-Nguồn ngẫu nhiên khi huấn luyện gồm: rút quỹ đạo (Mục 5.1), mẫu gió, và thăm dò của SAC; tất cả dùng chung
-bộ sinh số ngẫu nhiên của run (khởi tạo theo seed, lưu trong checkpoint).
+vào plant để gió thay đổi theo thời gian. Điều này áp dụng cho rollout cặp teacher/LQR của pha SAC, cho các
+chuyến DAgger (teacher hoặc học trò bay) và cho rollout học trò $\alpha=1$ (nhãn $\cS$) cùng rollout LQR (nhãn
+$\cL$). Nguồn ngẫu nhiên khi huấn luyện gồm: rút quỹ đạo (Mục 5.1), mẫu gió, và thăm dò của SAC; tất cả dùng chung
+bộ sinh số ngẫu nhiên của run (khởi tạo theo seed, lưu trong checkpoint/file trạng thái DAgger); riêng gió của tập
+kiểm định DAgger rút từ một dòng riêng (Mục 9).
 
 \textbf{Mô hình gió huấn luyện (tổng hợp, không dùng dữ liệu gió đo).} Mỗi quỹ đạo huấn luyện rút một mẫu
-gió độc lập (\texttt{d1\_sample\_wind}, tham số Dryden trong \texttt{d1\_dryden}); trong Khối A, teacher và
+gió độc lập (\texttt{d1\_sample\_wind}, tham số Dryden trong \texttt{d1\_dryden}); trong pha SAC, teacher và
 LQR song song dùng \emph{cùng} mẫu gió đó.
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
 \item \textbf{Gió trung bình:} tốc độ $U\sim\mathcal U[1,10]$ m/s (\texttt{D1\_WIND\_MIN/MAX}), phương ngang,
@@ -208,8 +186,8 @@ $U=10$ m/s cho lực trung bình $\approx0.43\,mg$. \emph{Giả thiết đơn gi
 thuộc vận tốc gió $w$, không phụ thuộc vận tốc riêng của UAV (cản theo vận tốc riêng nằm trong $D_v$ của
 plant, rất nhỏ); cùng quy ước này dùng khi quy dữ liệu gió đo thực ra lực (Mục 13.1).
 \item \textbf{Ai biết gió:} \textbf{chỉ teacher}, và chỉ lực tại bước hiện tại $F_k=F_w(t_k,x_k)$ (thông
-tin đặc quyền, hàm \texttt{d1\_wind\_now}; Mục 7). LQR, surrogate và bộ điều khiển đề xuất \textbf{không}
-biết gió; surrogate chỉ thấy tác động của gió một cách gián tiếp qua phần dư dự báo một bước (Mục 9).
+tin đặc quyền, hàm \texttt{d1\_wind\_now}; Mục 7). LQR, học trò và bộ điều khiển đề xuất \textbf{không}
+biết gió; học trò chỉ có lực ngoài ước lượng $\hat F$ từ bước trước (Mục 9).
 \texttt{D1\_WIND=0} tắt gió (khi đó $F_k=0$). (Hệ số cản $D_v$ của plant quá nhỏ để quy đổi gió thành lực nên
 không dùng cho gió.)
 \end{itemize}
@@ -246,20 +224,21 @@ luyện} (một mẫu gió cho mỗi quỹ đạo, dùng chung cho mọi bộ đ
 dùng để kiểm chứng trong script đánh giá cuối (Mục 13), không bao giờ dùng khi huấn luyện.
 
 \subsection{Quy tắc bay chung (mọi lượt bay trong mã)}
-Huấn luyện, Khối B, các chế độ chẩn đoán và đánh giá cuối đều dùng \emph{cùng} các quy tắc sau. Chúng là
-\textbf{một bản duy nhất} trong \texttt{src/joint} (\texttt{d1\_config}, \texttt{d1\_case\_len},
-\texttt{d1\_plant\_step}, \texttt{d1\_track\_err}, \texttt{d1\_sat}, \texttt{d1\_teacher\_step},
-\texttt{d1\_teacher\_reset}, \texttt{d1\_hist\_init/\allowbreak push/\allowbreak feature},
-\texttt{d1\_blend\_control}, \texttt{d1\_load\_deployed}), được cả pipeline lẫn script đánh giá gọi; không
-có bản sao.
+Pha SAC, pha DAgger, các chế độ chẩn đoán và đánh giá cuối đều dùng \emph{cùng} các quy tắc sau. Chúng là
+\textbf{một bản duy nhất} trong \texttt{src/joint} (\texttt{d1\_\allowbreak config}, \texttt{d1\_\allowbreak case\_\allowbreak len},
+\texttt{d1\_\allowbreak plant\_\allowbreak step}, \texttt{d1\_\allowbreak track\_\allowbreak err}, \texttt{d1\_\allowbreak sat},
+\texttt{d1\_\allowbreak teacher\_\allowbreak step}, \texttt{d1\_\allowbreak teacher\_\allowbreak reset},
+\texttt{d1\_\allowbreak student\_\allowbreak init/\allowbreak push/\allowbreak feature},
+\texttt{d1\_\allowbreak fly\_\allowbreak student}, \texttt{d1\_\allowbreak blend\_\allowbreak control},
+\texttt{d1\_\allowbreak load\_\allowbreak deployed}), được cả pipeline lẫn script đánh giá gọi; không có bản sao.
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
-\item \textbf{Độ dài:} mọi lượt bay (teacher, LQR, surrogate, blend, Khối B, đánh giá) bay
+\item \textbf{Độ dài:} mọi lượt bay (teacher, LQR, học trò, blend, DAgger, tin cậy, đánh giá) bay
 $\min(1000,\ n_{\mathrm{ref}}-N-1)=979$ bước (\texttt{d1\_case\_len}).
 \item \textbf{Bước plant:} RK4 với thời gian thực $t=(k-1)T_s$. \textbf{Phân kỳ} khi tích phân báo lỗi
 (ví dụ tốc độ góc Euler ZYX suy biến khi $\theta=\pm90^\circ$), trạng thái không hữu hạn, hoặc
 $\norm{p}>10^4$ m.
 \item \textbf{Luôn bay đủ quỹ đạo:} khi phân kỳ, lượt bay \textbf{không} dừng; plant được đặt lại đúng trên
-tham chiếu ở bước kế tiếp, trạng thái trong của bộ điều khiển được đặt lại (lịch sử của surrogate,
+tham chiếu ở bước kế tiếp, trạng thái trong của bộ điều khiển được đặt lại (bộ nhớ của học trò,
 $u_{\mathrm{prev}}$, tích phân $z$, solver/tập ràng buộc hoạt động), số lần đặt lại được đếm, và bay tiếp
 đến hết.
 \item \textbf{Sai số bám:} $e_k=\norm{p_k-p_{\mathrm{ref},k+1}}$ (trạng thái sau bước $k$ so với tham chiếu
@@ -435,10 +414,13 @@ kernel BLASFEO.
 \item \emph{Bản chất:} vòng lặp IPM và SQP đều bị chặn (100 và 50 vòng), nên đây là các lần giải \emph{chậm bệnh lý} (dữ liệu
 QP suy biến), không phải vòng lặp vô hạn; nguyên nhân số học chính xác chưa được chứng minh. Khi resume, 6/8 chain treo lại
 đúng quỹ đạo cũ (tất định); một chain vượt qua được (sai khác số học nhỏ giữa các máy).
-\item \emph{Đã làm:} ghim acados (commit \texttt{3edf443}); resume bắt buộc có checkpoint; watchdog dừng bước train sau 30
-phút không có checkpoint mới để checkpoint được tải lên. \emph{Đề xuất, chưa có trong code:} giới hạn thời gian mỗi lần giải
-(\texttt{timeout\_max\_time} $=2$ s; hết giờ $=$ lời giải không dùng được) và ghi thời gian giải vào log
-(\texttt{docs/D1\_student\_design.pdf}, Mục 7).
+\item \emph{Đã làm:} ghim acados (commit \texttt{3edf443}); resume bắt buộc có checkpoint; watchdog dừng bước train sau 60
+phút không có file mới (lớn hơn thời gian xấu nhất của một quỹ đạo khi mọi bước đều hết giờ, $979\times2$ s
+$\approx33$ phút) để checkpoint được tải lên; \textbf{giới hạn thời gian mỗi lần giải}
+(\texttt{timeout\_max\_time} $=2$ s, kiểm tra sau mỗi vòng SQP; hết giờ $=$ status 7 $=$ lời giải không dùng được,
+tính vào $r_{\mathrm{fail}}$); log mỗi quỹ đạo ghi số lần hết giờ và thời gian giải lớn nhất, p99. Lời giải bình
+thường nhanh hơn nhiều so với 2 s, nên giới hạn này chỉ có tác dụng ở các lần giải bệnh lý; khi đó kết quả phụ
+thuộc tốc độ máy (công bố).
 \end{itemize}
 
 \noindent{\small\itshape Giới hạn đã biết: trung bình chi phí trên $M=5$ kịch bản KHÔNG tự tạo bảo đảm
@@ -446,10 +428,9 @@ robust trên toàn miền bất định; đây là hedge kinh nghiệm, không p
 
 % ===================== 7 =====================
 \section{SAC tinh chỉnh $Q,R$ (khởi tạo Bryson)}
-Đây là \textbf{Khối A} (Mục 2). \textbf{Ý đồ:} khởi tạo $Q,R=$ Bryson để reward \textbf{tốt ngay từ
-đầu}; SAC chỉ tinh chỉnh quanh đó. Nhãn residual cho surrogate lấy cùng lúc ở đây. Nhánh \textbf{LQR} bay
-song song trên bản sao plant riêng chỉ ghi dữ liệu co rút $g_H$ làm chẩn đoán; nó \textbf{không} dùng cho
-reward hay cho nhãn $\cL$ (nhãn $\cL$ và $\cS$ lấy ở Khối B, Mục 10).
+Đây là \textbf{pha 1} (Mục 2). \textbf{Ý đồ:} khởi tạo $Q,R=$ Bryson để reward \textbf{tốt ngay từ đầu}; SAC
+chỉ tinh chỉnh quanh đó. Pha này \textbf{chỉ} tune teacher; không thu nhãn, không học học trò. Nhánh
+\textbf{LQR} bay song song trên bản sao plant riêng chỉ ghi dữ liệu co rút $g_H$ làm chẩn đoán.
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
 \item Hành động $a\in[-1,1]^6$ ánh xạ sang \textbf{log-multiplier} cho 4 nhóm $Q$ (pos/att/vel/rate) và 2
 nhóm $R$ ($T/\tau$), dải $[10^{-d},10^{d}]$ \textbf{quanh Bryson}, $d=$ \texttt{D1\_LOGMULT\_DEC}
@@ -465,96 +446,121 @@ mẫu ngẫu nhiên từ phân phối khởi tạo (quanh $a=0$, tức quanh Bry
 r=-\big(\mathrm{RMSE}_{\mathrm{pos}} + 0.01\,\mathrm{RMS}(\Delta u) + 0.5\,r_{\mathrm{viol}}
 + 5\,r_{\mathrm{fail}}\big),
 \]
-trong đó sai số vị trí mỗi bước bị chặn ở $5$ m; $\mathrm{RMS}(\Delta u)$ là
-căn trung bình bình phương độ thay đổi lệnh giữa hai bước; $r_{\mathrm{viol}}$ là tỉ lệ bước có $|\phi|$
-hoặc $|\theta|>1.35$ rad; $r_{\mathrm{fail}}$ là tỉ lệ bước có lời giải teacher \textbf{không dùng được}
-(status $\notin\{0,2\}$ hoặc $\delta u_0$ không hữu hạn) --- cùng một định nghĩa với luật áp dụng và luật
-nạp nhãn (Mục 7); bước chạm giới hạn vòng lặp (status $2$) được áp dụng và làm nhãn nên không bị tính là
-thất bại. Reward \emph{không} có thành phần vận tốc. Theo quy tắc bay chung (Mục 4.1), quỹ đạo luôn bay đủ $979$ bước; bước phân kỳ tính sai số
-$5$ m và một lần vi phạm tư thế, rồi bản sao plant đó (teacher hoặc LQR) được đặt lại trên tham chiếu; mọi
-trung bình lấy trên đủ số bước. Reward được tính trên plant có gió (Mục 4).
-\item \textbf{Checkpoint đầy đủ} (actor/critic/$\alpha_{\mathrm{ent}}$/trạng thái Adam/buffer SAC $+$
-surrogate (mạng, Adam, buffer) $+$ bộ đếm, $Q,R$ cuối $+$ \textbf{iter đang làm dở} (hành động $a$, chỉ số
-các quỹ đạo, reward đã có, quỹ đạo kế tiếp) $+$ RNG) để \textbf{resume đến mức từng quỹ đạo}: một iter dài hơn
-một job CI được làm tiếp ở job sau với cùng chuỗi ngẫu nhiên. Ghi đè cùng một file sau mỗi iter và mỗi
-$\ge120$ s giữa các quỹ đạo. Vòng lặp không bắt đầu một quỹ đạo mới nếu dự báo (lớn nhất của 5 quỹ đạo gần
-nhất) vượt ngân sách thời gian. Mỗi quỹ đạo in một dòng tiến độ (tỉ lệ status hội tụ / chạm giới hạn vòng
-lặp / không dùng được, số lần đặt lại do phân kỳ, thời gian).
-\item \textbf{Checkpoint mốc} (\texttt{D1\_CKPT\_EVERY\_ITER}, mặc định $50$): khi số iter chia hết cho
-$50$, lưu một bản cố định \texttt{checkpoint\_\allowbreak seed<s>\_\allowbreak iter<NNNN>.mat} và chạy Khối B trên
-\emph{bản sao} surrogate để tạo \texttt{conf\_\allowbreak seed<s>\_\allowbreak iter<NNNN>.mat} (tin cậy $+$ surrogate
-đã hiệu chỉnh đầu $\cS$ của mốc
-đó); trạng thái bộ sinh ngẫu nhiên được khôi phục sau đó nên việc huấn luyện không bị ảnh hưởng. Mốc là trạng
-thái tất định của chuỗi (không phụ thuộc lịch chia job). \textbf{Dừng đúng iter} (\texttt{D1\_STOP\_ITER}):
-khi đạt số iter chỉ định, vòng lặp dừng, lưu checkpoint và chạy Khối B như bình thường ($0$ = tắt).
+trong đó sai số vị trí mỗi bước bị chặn ở $5$ m; $\mathrm{RMS}(\Delta u)$ là căn trung bình bình phương độ
+thay đổi lệnh giữa hai bước; $r_{\mathrm{viol}}$ là tỉ lệ bước có $|\phi|$ hoặc $|\theta|>1.35$ rad;
+$r_{\mathrm{fail}}$ là tỉ lệ bước có lời giải teacher \textbf{không dùng được} (status $\notin\{0,2\}$, kể cả hết
+giờ, hoặc $\delta u_0$ không hữu hạn) --- cùng định nghĩa với luật áp dụng (Mục 7). Reward \emph{không} có thành
+phần vận tốc. Theo quy tắc bay chung (Mục 4.1), quỹ đạo luôn bay đủ $979$ bước; bước phân kỳ tính sai số $5$ m và
+một lần vi phạm tư thế, rồi bản sao plant được đặt lại trên tham chiếu. Reward được tính trên plant có gió.
+\item \textbf{Checkpoint đầy đủ} (actor/critic/$\alpha_{\mathrm{ent}}$/trạng thái Adam/buffer SAC $+$ bộ đếm,
+$Q,R$ cuối $+$ \textbf{iter đang làm dở} (hành động $a$, chỉ số các quỹ đạo, reward và tỉ lệ lời giải dùng được
+đã có, quỹ đạo kế tiếp) $+$ RNG) để \textbf{resume đến mức từng quỹ đạo}. Ghi đè cùng một file sau mỗi iter và
+mỗi $\ge120$ s giữa các quỹ đạo. Vòng lặp không bắt đầu một quỹ đạo mới nếu dự báo (lớn nhất của 5 quỹ đạo gần
+nhất) vượt ngân sách thời gian. Mỗi quỹ đạo in một dòng (tỉ lệ status hội tụ / chạm giới hạn vòng lặp / không
+dùng được, số lần hết giờ, thời gian giải lớn nhất và p99, số lần đặt lại do phân kỳ, thời gian).
+\item \textbf{Checkpoint mốc} (\texttt{D1\_\allowbreak CKPT\_\allowbreak EVERY\_\allowbreak ITER}, mặc định $50$): lưu bản cố định
+\texttt{checkpoint\_\allowbreak seed<s>\_\allowbreak iter<NNNN>.mat} (chỉ SAC/teacher). \textbf{Dừng đúng iter}
+(\texttt{D1\_STOP\_ITER}): khi đạt số iter chỉ định, vòng lặp dừng và lưu checkpoint ($0$ = tắt).
 \item Tuỳ chọn ablation \texttt{D1\_RANDOM\_QR=1}: gốc $Q,R$ của teacher lấy ngẫu nhiên log-uniform
 $10^{[-2,2]}$ (cố định theo seed) thay cho Bryson; LQR vẫn dùng Bryson.
 \end{itemize}
 {\small\itshape Nguồn: Haarnoja et al. (2018), Soft Actor-Critic. Lưu ý: dùng RL để tinh chỉnh trọng số
 MPC cố định có ít tài liệu nền; Bryson chỉ đóng vai KHỞI TẠO cho SAC. Kết quả SAC tốt trên tập train
-KHÔNG bảo đảm tổng quát hoá --- cần báo reward, ngân sách đánh giá và hiệu năng trên \emph{tập test tách
-biệt}.}
+KHÔNG bảo đảm tổng quát hoá.}
 
 % ===================== 8 =====================
-\section{Surrogate chưng cất (behavioral cloning theo dòng)}
+\section{Học trò tuyến tính và DAgger}
+\subsection{Học trò}
+\[
+\Delta u_k=W\varphi_k,\qquad
+\varphi_k=\big[\,e_k;\ \hat F_k;\ \bar u_k;\ \bar u_{k+N_c}-\bar u_k;\ \bar u_{k+N}-\bar u_k\,\big]\in\R^{12+3+4+4+4=27},
+\qquad \bar u_j=u_{\mathrm{ref},j}-u_h
+\]
+(\texttt{d1\_student\_feature}):
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
-\item \textbf{Đầu vào $z_k$ (208 chiều, \texttt{d1\_hist\_feature})}: 4 trạng thái gần nhất
-\emph{gồm trạng thái hiện tại} $x_{k-3..k}$ ($12{\times}4$), 4 lệnh đã áp dụng $u_{k-4..k-1}$ ($4{\times}4$),
-tham chiếu $x_{\mathrm{ref},k..k+10}$ ($12{\times}11$), và \textbf{phần dư dự báo một bước}
-\[
-r_k \;=\; x_k-\Phi_{\mathrm{nom}}(x_{k-1},u_{k-1})\quad(12),
-\]
-với $\Phi_{\mathrm{nom}}$ là một bước RK4 của mô hình danh nghĩa \emph{không có gió}, góc Euler được quấn về
-$(-\pi,\pi]$. Lịch sử được cập nhật sau mỗi bước plant (\texttt{d1\_hist\_push}); ở bước đầu và sau mỗi lần
-plant được đặt lại do phân kỳ, lịch sử được lấp bằng trạng thái hiện tại, $u_h$ và $r=0$
-(\texttt{d1\_hist\_init}). Không có $Q,R$ và \textbf{không có gió} trong đầu vào.
-\item \textbf{Vì sao cần $r_k$.} Nhãn teacher phụ thuộc lực gió $F_k$ mà surrogate không được biết. Với gió
-biến đổi chậm so với $T_s$, $r_k$ mang đúng thông tin đó: phần vận tốc $r_{v,k}\approx T_s F/m$, phần vị trí
-$\approx\tfrac{T_s^2}{2}F/m$ (kiểm tra với LQR bay trong gió huấn luyện: sai số tương đối trung vị $1.8\%$,
-p95 $4.3\%$). Trên plant danh nghĩa khi huấn luyện, phần góc/tốc độ góc của $r_k$ bằng $0$ (gió không tạo
-mô-men), nên mạng không học được gì từ $6$ thành phần này; khi plant lệch tham số (đánh giá), $r_k$ gộp cả sai
-số mô hình và các thành phần quay khác $0$ là đầu vào ngoài phân phối huấn luyện (giới hạn đã biết). Đây là sơ đồ chưng cất
-\emph{teacher có thông tin đặc quyền $\to$ học trò chỉ dùng lịch sử} (Chen et al. 2020; Kumar et al. 2021).
-\item \textbf{Chuẩn hoá cố định} (\texttt{d1\_\allowbreak feature\_\allowbreak scale}): trạng thái/tham chiếu
-theo thang vật lý (vị trí $100$ m, góc $1.35$ / $\pi$ rad, vận tốc $25$ m/s, tốc độ góc $10$ rad/s); lệnh theo
-biên actuator $\max(|u_{\min}|,|u_{\max}|)$, tức $[19.07,\ 0.5,\ 0.5,\ 0.25]$; phần dư $r_k$ theo \emph{đáp ứng một bước với nhiễu
-lớn nhất đã khai báo}: tịnh tiến dùng gia tốc gió huấn luyện lớn nhất
-\[
-a_{\max}=\max_i d_i\,\big(U_{\max}+3\sigma_u(U_{\max})\big)=6.71\ \mathrm{m/s^2}
-\]
-(vị trí $\tfrac{T_s^2}{2}a_{\max}=8.4$ mm,
-vận tốc $T_s a_{\max}=0.336$ m/s); quay dùng gia tốc góc tối đa của actuator
-$\alpha_\tau\tau_{\max}/J$ (góc $\tfrac{T_s^2}{2}(\cdot)=[0.163,0.163,0.041]$ rad, tốc độ góc
-$T_s(\cdot)=[6.53,6.53,1.63]$ rad/s).
-\item \textbf{Mạng hai đầu ra}: thân chung MLP $208$-$128$-$128$-$128$ (swish) rẽ hai nhánh: \emph{nhánh
-phần dư} $\to4$ ($\tanh$) cho $\widehat{\Delta u}$ đã chuẩn hoá, và \emph{nhánh tin cậy} $\to1$ (sigmoid)
-cho $\cS$.
-\item \textbf{Nhánh $\Delta u$ --- nhãn từ TEACHER (Khối A)}:
-$\Delta u^*_k=u_{\mathrm{teacher},k}-\mathrm{sat}\big(u_h-K(x_k-x_{\mathrm{ref},k})\big)$, LQR tính tại
-\emph{cùng} trạng thái teacher, với đầu vào $z_k$ tại trạng thái đó (lịch sử của chính bản sao teacher);
-chỉ nạp mẫu khi lời giải teacher \emph{dùng được} (status $0$ hoặc $2$ và $\delta u_0$ hữu hạn, Mục 7). Nhãn
-chia cho dải actuator $u_{\max}-u_{\min}=[T_{\max},1,1,0.5]$ rồi chặn trong $[-1,1]$. Mỗi nhãn nạp vào
-buffer vòng $10^5$ và kích hoạt \textbf{một} bước Adam (lr $10^{-3}$) trên minibatch 256 ($50\%$ từ nhãn của
-iter hiện tại và 2 iter trước, $50\%$ đều trên buffer), mất mát MSE; cập nhật thân mạng và đầu $\Delta u$.
-Nếu mất mát hoặc bất kỳ gradient nào không hữu hạn thì \textbf{bỏ qua} bước Adam đó (đếm vào
-\texttt{nSkipped}). Đây là ``chưng cất NMPC'' dạng phần dư; trạng thái teacher đi qua chịu gió huấn luyện.
-\item \textbf{Nhánh $\cS$ --- nhãn từ ROLLOUT SURROGATE (Khối B)}: mất mát MSE $(\cS(z_k)-s_k)^2$ với $s_k$
-định nghĩa ở Mục 10.2; \textbf{chỉ} cập nhật lớp cuối của đầu $\cS$, thân mạng và đầu $\Delta u$ đóng
-băng; bước có gradient không hữu hạn cũng bị bỏ qua. Việc này làm trên bản sao; đầu $\cS$ của surrogate
-huấn luyện giữ nguyên, bản đã hiệu chỉnh được lưu trong file \texttt{conf} (Mục 2).
+\item $e_k=x_k-x_{\mathrm{ref},k}$ (12, góc Euler quấn về $(-\pi,\pi]$): để học gain phản hồi khác của teacher.
+\item $\hat F_k$ (3): lực ngoài ước lượng (bên dưới): phần bù gió mà teacher làm nhờ biết gió.
+\item $\bar u_k$ (4): lệnh feedforward flatness của tham chiếu (tính sẵn cùng quỹ đạo).
+\item $\bar u_{k+N_c}-\bar u_k$, $\bar u_{k+N}-\bar u_k$ (8): nhìn trước ở đúng hai tầm của teacher ($N_c{=}5$,
+$N{=}20$) để đón trước khúc cua.
 \end{itemize}
-Hai đầu \textbf{dùng chung thân mạng} nhưng \textbf{huấn luyện riêng}: ở hai khối khác nhau, với hai mất
-mát riêng (không có mất mát kết hợp); ký hiệu $\widehat{\Delta u}=\pi_\theta^{u}(z_k)$, $\cS=\pi_\theta^{c}(z_k)$.
-Khối B không cập nhật đầu residual (nhãn $\Delta u^*$ chỉ có tại trạng thái teacher đi qua).
-{\small\itshape Behavioral cloning chịu ``dịch phân phối''; hướng cải thiện mạnh nhất là DAgger (Ross et
-al., 2011). Đầu $\cS$ là cơ chế để surrogate \emph{tự biết} vùng nó bám kém.}
+\textbf{Không có hằng số tự do:} tại hover không gió $\varphi=0$ và teacher trùng LQR ($\Delta u^*=0$), nên
+$\Delta u(0)=0$ phải đúng; bias sẽ tạo lệch tĩnh giả. \textbf{Chi phí} mỗi bước: $W\varphi$ $108$ phép nhân-cộng,
+$\hat F$ 12 hàm lượng giác $+\approx30$ phép tính, hai logistic của cổng; LQR: 48 phép nhân-cộng.
+
+\textbf{Lực ngoài ước lượng} (\texttt{d1\_fhat}), từ $m\dot v=\alpha_T T R(\eta)e_3-mg e_3-D_v v+F$ tích phân
+hình thang trên một bước (lệnh $T_{k-1}$ giữ bậc 0), tham số danh nghĩa:
+\[
+\hat F_k=\tfrac{m}{T_s}(v_k-v_{k-1})+mg\,e_3-\alpha_T T_{k-1}\tfrac12\big(R(\eta_{k-1})+R(\eta_k)\big)e_3
++\tfrac12D_v(v_{k-1}+v_k),
+\]
+$\hat F=0$ ở bước đầu và sau mỗi lần đặt lại do phân kỳ. Kiểm tra (LQR, 5 quỹ đạo, gió huấn luyện, so với lực
+trung bình thật trong bước): sai số tương đối trung vị $1.0\%$, sai số tuyệt đối p95 $0.031$ N (lực điển hình
+$\approx1$ N). Chỉ phần tịnh tiến: khi huấn luyện gió không tạo mô-men.
+
+\subsection{DAgger (Ross, Gordon, Bagnell 2011, Thuật toán 3.1; \texttt{d1\_dagger\_run})}
+Chuyên gia $\pi^*$ = teacher của checkpoint chỉ định với $a=\tanh(\mu)$, \textbf{cố định} suốt DAgger. Biến thể
+không tham số $\beta_1=1$, $\beta_{i\ge2}=0$. Mỗi vòng bay $20$ quỹ đạo rút có hoàn lại từ ngân hàng, gió huấn
+luyện, dòng ngẫu nhiên khởi tạo \texttt{seed}$+9900$:
+\begin{enumerate}[leftmargin=1.6em,itemsep=1pt]
+\item Vòng 1: \emph{teacher bay}; tại mỗi bước giải dùng được ghi $(\varphi_k,\ y_k)$,
+$y_k=(u_T-\mathrm{sat}(\uL))\oslash(u_{\max}-u_{\min})$.
+\item Vòng $i=2..N_D$: \emph{học trò bay} với $\alpha=1$: $u=\mathrm{sat}(\mathrm{sat}(\uL)+W_i\varphi)$. Tại mỗi
+trạng thái học trò đi qua, \emph{hỏi} teacher (trạng thái đó, lệnh trước đó của học trò làm $u_{\mathrm{prev}}$,
+lực gió đúng) nhưng \textbf{không áp dụng} lệnh teacher (\texttt{d1\_dagger\_case}).
+\item Nhãn chỉ ghi khi lời giải dùng được \textbf{và} trạng thái còn trong vùng bay của các chỉ số: sai số vị trí
+$<5$ m (mức chặn) và $|\phi|,|\theta|\le1.35$ rad (ngưỡng vi phạm tư thế); ngoài vùng này (ví dụ học trò sớm mất
+ổn định) chuyến bay đã là thất bại và nhãn vô nghĩa.
+\item Sau mỗi vòng: gộp toàn bộ dữ liệu, giải ridge $\to W_{i+1}$; kiểm tra ổn định; chấm trên tập kiểm định.
+\item Trả về $W^\star$ có RMSE kiểm định nhỏ nhất trong các ứng viên \textbf{đạt} kiểm tra ổn định.
+\end{enumerate}
+\textbf{Ridge dạng đóng} (\texttt{d1\_ridge\_fit}): dữ liệu lưu dưới dạng thống kê đủ theo từng chuyến
+($\sum\varphi\varphi\T$, $\sum\varphi y\T$, $\sum yy\T$, số nhãn), nên nghiệm chính xác và không tốn bộ nhớ. Đặc
+trưng chia cho RMS của chính nó (không trừ trung bình, để giữ $\Delta u(0)=0$);
+$\tilde W\T=(\tilde\Phi\T\tilde\Phi+\lambda n I)^{-1}\tilde\Phi\T Y$, $\lambda\in\{10^{-6},\dots,10^{2}\}$ chọn bằng
+kiểm định chéo 5 phần \emph{theo chuyến bay} (MSE giữ lại tính chính xác từ thống kê), rồi giải lại trên toàn bộ.
+
+\textbf{Tập kiểm định} (\texttt{d1\_val\_set}): 15 chuyến, mỗi ô (họ $\times$ mức gia tốc) một quỹ đạo (tốc độ
+trung vị của ô), gió huấn luyện từ dòng riêng \texttt{RandStream(seed}$+7700$\texttt{)}, không trùng dữ liệu
+DAgger; tiêu chí: RMSE vị trí đã chặn của học trò $\alpha=1$.
+
+\textbf{Kiểm tra ổn định} (\texttt{d1\_student\_stability}; tuyến tính hoá quanh hover, $x_{\mathrm{ref}}=0$,
+không nhiễu): $\hat F_k=L_1x_k+L_0x_{k-1}+L_u\delta u_{k-1}$ (Jacobian số của $\hat F$), $z_k=[x_k;x_{k-1};\delta
+u_{k-1}]$, $W=[W_e\ W_F\ \cdot]$:
+\[
+A_\alpha=\begin{bmatrix}A_d+B_dG_1 & B_dG_0 & B_dG_u\\ I&0&0\\ G_1&G_0&G_u\end{bmatrix},
+\]
+\[
+G_1=-K+\alpha(W_e+W_FL_1),\quad G_0=\alpha W_FL_0,\quad G_u=\alpha W_FL_u .
+\]
+Yêu cầu $\rho(A_\alpha)<1$ trên lưới $\alpha\in\{0,0.001,\dots,1\}$ ($\alpha=0$ là vòng LQR). Đây là điều kiện cần
+cho $\alpha$ cố định trên mô hình tuyến tính hoá; không bảo đảm cho $\alpha$ đổi theo thời gian, bão hoà hay plant
+lệch.
+
+\textbf{Ngân sách} (\texttt{D1\_DAGGER\_ITERS}, mặc định $N_D=10$): $10\times20$ chuyến $\approx1.96\times10^5$
+lần giải teacher. Resume theo từng chuyến bay; mỗi chuyến in một dòng \texttt{DAGGER\_CASE} (ai bay, tỉ lệ nhãn,
+số lần hết giờ, thời gian giải, RMSE), mỗi vòng một dòng \texttt{DAGGER\_ITER} ($\lambda$, MSE kiểm định chéo,
+$\rho_{\max}$, RMSE kiểm định).
+
+\textbf{Định lý áp dụng tới đâu.} Mất mát ridge lồi mạnh theo $W$ và Follow-the-Leader trên mất mát lồi mạnh là
+no-regret, nên giả thiết của Định lý 3.1/3.3 được thoả \emph{về cấu trúc} (chuyên gia cố định, mất mát lồi
+mạnh, bị chặn trong vùng bay). Nhưng bậc $N=\tilde O(T)$ với $T=979$ không đạt với $N_D=10$, nên lợi ích được báo
+là \textbf{thực nghiệm}. Hai sai số không giảm được: học trò chỉ thấy $\hat F$ trễ một bước, và tuyến tính không
+biểu diễn được phần phi tuyến của teacher.
+
+{\small\itshape Kiểm tra cục bộ với teacher giả (LQR cứng hơn bám tham chiếu nhất quán với gió, không phải
+NMPC): $W$ học chỉ từ dữ liệu teacher (vòng 1) bị loại ($\rho_{\max}>1$, tự bay sai số 3.2 m); sau một vòng
+DAgger RMSE kiểm định giảm từ $0.306$ m (LQR) còn $0.12$--$0.20$ m, $\rho_{\max}\approx0.90$; hệ số bù gió có dấu
+đúng vật lý. Đây chỉ là kiểm tra mã, không phải kết quả.}
 
 % ===================== 9 =====================
 \section{Định nghĩa tin cậy $\cS$ và $\cL$}
 Hai tin cậy được định nghĩa theo \textbf{tiêu chí phù hợp với từng bộ điều khiển}, KHÔNG dùng chung một
-hàm $V$: $V$ là hàm Lyapunov \emph{của LQR}, nên dùng nó để chấm surrogate là không hợp lí.
+hàm $V$: $V$ là hàm Lyapunov \emph{của LQR}, nên dùng nó để chấm học trò là không hợp lí. Cả hai được học ở cuối
+pha DAgger (\texttt{d1\_consolidate}), trên plant danh nghĩa với gió huấn luyện, và lưu cùng $W^\star$ trong file
+học trò.
 
-\subsection{$\cL$ --- dựa trên hàm Lyapunov của LQR (giữ nguyên)}
+\subsection{$\cL$ --- dựa trên hàm Lyapunov của LQR}
 $V(e)=e\T P e$ với $P=S$ (Riccati của LQR), $e=x-\xref$, là hàm Lyapunov tự nhiên của LQR $\Rightarrow$ đo
 co rút của LQR bằng $V$ là hợp lí. Trên cửa sổ $H=20$ bước:
 \[
@@ -564,125 +570,91 @@ co rút của LQR bằng $V$ là hợp lí. Trên cửa sổ $H=20$ bước:
 \cL(e)=\Pr\!\big(y_L=1\mid e\big)=\sigma\!\big(w\T z(e)+b\big)\quad(\text{hồi quy logistic trên LQR vòng
 kín}),
 \]
-với $z(e)$ chuẩn hoá của $\varphi(e)=[\,e\,(12);\ \norm{e_{\mathrm{pos}}},\norm{e_{\mathrm{att}}},
-\norm{e_{\mathrm{vel}}},\norm{e_{\mathrm{rate}}}\,]\in\R^{16}$.
+với $z(e)$ chuẩn hoá của $\varphi_{\mathrm{conf}}(e)=[\,e\,(12);\ \norm{e_{\mathrm{pos}}},\norm{e_{\mathrm{att}}},
+\norm{e_{\mathrm{vel}}},\norm{e_{\mathrm{rate}}}\,]\in\R^{16}$ (góc quấn về $(-\pi,\pi]$).
+Dữ liệu: 60 quỹ đạo lấy đều từ ngân hàng, LQR (có bão hoà), một mẫu gió huấn luyện cho mỗi quỹ đạo, luôn đủ 979
+bước (bước phân kỳ để NaN nên mọi cửa sổ vắt qua lần đặt lại bị loại). Hồi quy logistic L2 ($\lambda=10^{-3}$)
+có trọng số cân bằng lớp, đặc trưng chuẩn hoá, 800 bước gradient (lr $0.5$).
 
-Dữ liệu (Khối B): 60 quỹ đạo lấy đều từ ngân hàng, LQR (có bão hoà) bay trên plant danh nghĩa với một mẫu
-gió huấn luyện riêng cho mỗi quỹ đạo (Mục 4), luôn đủ 979 bước theo quy tắc bay chung (Mục 4.1; bước phân kỳ
-để NaN nên mọi cửa sổ vắt qua lần đặt lại bị loại); nhãn ở mọi bước có đủ cửa sổ $H$ hữu hạn; góc của sai
-số được quấn về $(-\pi,\pi]$. Huấn luyện: hồi quy logistic L2 ($\lambda=10^{-3}$) có trọng số cân bằng lớp,
-đặc trưng chuẩn hoá, 800 bước gradient (lr $0.5$). LQR cố định nhưng mẫu gió thay đổi theo bộ sinh ngẫu nhiên
-của run, nên dữ liệu và kết quả $\cL$ khác nhau giữa các lần chạy Khối B (độ chính xác được in ra ở dòng
-\texttt{CONF\_DONE}).
-
-\subsection{$\cS$ --- điểm chất lượng bám vị trí gần đây, do surrogate đoán (KHÔNG dùng $V$, KHÔNG so LQR)}
-Trên rollout surrogate, sai số bám vị trí $e^S_{p,k}=p^S_k-p_{\mathrm{ref},k}$. Lấy \textbf{RMS vị trí trên
-$20$ bước VỪA QUA}:
+\subsection{$\cS$ --- điểm chất lượng bám vị trí gần đây của học trò (KHÔNG dùng $V$)}
+Trên chuyến bay của học trò ở $\alpha=1$, lấy \textbf{RMS sai số vị trí (đã chặn $5$ m) trên $20$ bước VỪA QUA}:
 \[
-E^S_{20}(k)=\sqrt{\frac{1}{20}\sum_{j=k-19}^{k}\norm{e^S_{p,j}}^2}\,.
+E^S_{20}(k)=\sqrt{\tfrac{1}{20}\textstyle\sum_{j=k-19}^{k}\norm{e^S_{p,j}}^2},\qquad
+s_k=\exp\!\left(-\big(E^S_{20}(k)/\varepsilon_p\big)^2\right)\in[0,1],\quad \varepsilon_p=0.5\ \mathrm{m}.
 \]
-Chuẩn hoá RMS về $[0,1]$ với thang $\varepsilon_p$ (do người thiết kế chọn và công bố), ví dụ:
-\[
-s_k=\exp\!\left(-\Big(\frac{E^S_{20}(k)}{\varepsilon_p}\Big)^2\right)\in[0,1].
-\]
-RMS gần $0\Rightarrow s_k\to1$; RMS lớn $\Rightarrow s_k\to0$. \emph{UAV bám hoàn hảo ($e\equiv0$) suốt $20$
-bước nhận $s_k=1$}, không còn bị phạt vô lí như kiểu ``đếm số bước giảm''. (Hàm mũ chỉ là một lựa chọn
-chuẩn hoá; có thể thay bằng phép khác, miễn $\cS$ học \emph{mức} sai số bám, không phải tần suất giảm.)
-
-\begin{definition}[Tin cậy $\cS$ --- điểm chất lượng bám gần đây]
-Đầu $\cS$ của surrogate học dự đoán $s_k$ từ đầu vào NN hiện tại $z_k$:
-\[
-\cS(z_k)=\pi_\theta^{c}(z_k)\ \approx\ s_k.
-\]
-Vì cửa sổ là \textbf{20 bước vừa qua}, $\cS$ là \emph{điểm dự đoán chất lượng bám vị trí gần đây}, KHÔNG
-phải ``xác suất sai số giảm trong 20 bước tới''. Khi bay chỉ cần một lần suy luận từ $z_k$; \textbf{không
-tính cửa sổ 20 bước online}.
+\begin{definition}[Tin cậy $\cS$]
+$\cS=\sigma(w_S\T z_S+b_S)\approx s_k$: hồi quy logistic với \textbf{nhãn mềm} $s_k$ (cross-entropy, L2
+$\lambda=10^{-3}$, 800 bước gradient, không trọng số lớp) trên 18 đặc trưng rẻ chuẩn hoá
+$[\varphi_{\mathrm{conf}}(e)\ (16);\ \norm{\hat F_k};\ \norm{\bar u_k}]$ (\texttt{d1\_\allowbreak cs\_\allowbreak feature}). Vì cửa sổ là 20
+bước vừa qua, $\cS$ là \emph{điểm dự đoán chất lượng bám gần đây}, KHÔNG phải xác suất sai số giảm; khi bay chỉ
+cần một lần tính logistic, không tính cửa sổ online.
 \end{definition}
-
-Nhãn $s_k$ lấy từ \textbf{rollout surrogate-residual offline} (Khối B): 40 quỹ đạo lấy đều từ ngân hàng,
-$\alpha=1$ ($u_k=\mathrm{sat}(\mathrm{sat}(\uL)+\widehat{\Delta u}_k)$), plant danh nghĩa với một mẫu gió
-huấn luyện riêng cho mỗi quỹ đạo, luôn đủ 979 bước theo quy tắc bay chung (nếu đầu ra $\widehat{\Delta u}$
-không hữu hạn thì dùng $0$); sai số dùng cho $E^S_{20}$ là sai số đã
-chặn $5$ m của Mục 4.1 (bước phân kỳ tính $5$ m); nhãn cho $k=H,\dots,$ bước cuối; $\varepsilon_p=0.5$ m. Huấn luyện: MSE, 300 bước Adam (batch 256, lr $10^{-3}$), chỉ lớp cuối của đầu $\cS$. Diễn giải: $\cS$ cao
-$\Rightarrow$ gần đây surrogate bám tốt $\Rightarrow$ đáng tin, cho residual chạy; $\cS$ thấp $\Rightarrow$
-bám kém $\Rightarrow$ kém tin. Cả $\cS,\cL\in[0,1]$.
+Dữ liệu: 40 quỹ đạo lấy đều từ ngân hàng, học trò $W^\star$ bay với $\alpha=1$
+($u=\mathrm{sat}(\mathrm{sat}(\uL)+W^\star\varphi)$), một mẫu gió huấn luyện cho mỗi quỹ đạo, đủ 979 bước;
+nhãn cho $k=H,\dots,$ bước cuối.
 
 {\small\itshape Nguồn: $V$ = nghiệm Riccati là hàm Lyapunov của LQR (Anderson \& Moore, 1990); hồi quy
 logistic (Bishop, 2006).}
 
 \subsection{Ý nghĩa thống kê --- những điều $\cS,\cL$ KHÔNG bảo đảm}
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
-\item \textbf{$\cS$ đo chất lượng bám gần đây}, không đồng nghĩa với: (i) surrogate mô phỏng đúng teacher
-(sai số chưng cất nhỏ), hay (ii) residual bảo toàn co rút Lyapunov. Ba thuộc tính này \emph{không} tương
-đương --- surrogate có thể bám tốt mà vẫn khác teacher, hoặc mô phỏng teacher đúng ở nơi cả hai đều sai số
-lớn do giới hạn vật lý. Vì vậy KHÔNG diễn giải $\cS$ là ``xác suất surrogate chính xác'' hay ``xác suất
-residual an toàn''.
-\item \textbf{Chỉ hiệu chỉnh trên plant danh nghĩa với gió huấn luyện:} nhãn $\cS$ và $\cL$ đều thu trên
-plant danh nghĩa chịu gió theo mô hình ở Mục 4. Độ tin cậy của $\cS,\cL$ khi plant lệch tham số, hoặc với gió
-ngoài phân phối của mô hình đó (ví dụ gió đo thực), \emph{chưa được hiệu chỉnh} --- chỉ được kiểm tra trong
-đánh giá cuối (Mục 13).
-\item \textbf{Dịch phân phối:} nhãn $\cS$ thu ở $\alpha=1$ (residual đầy đủ), còn triển khai
-$\alpha=\cS g_L(\cL)$ tạo phân phối trạng thái khác. Cần \emph{kiểm định $\cS$ trên rollout của chính bộ
-điều khiển lai}, không chỉ rollout residual đầy đủ.
-\item \textbf{$\cL$ là xác suất thống kê}, không phải chứng nhận co rút: $\cL(e)=\Pr(V_{k+20}-V_k<0)$ cao
-KHÔNG bảo đảm $V_{k+1}-V_k<0$ trên plant hiện tại (nhất là khi quỹ đạo động, plant lệch, hay bão hoà). Hơn
-nữa nhãn $\cL$ dùng co rút \emph{sau 20 bước} còn phân tích Mục 12 dùng co rút \emph{từng bước} --- hai đại
-lượng khác nhau, không thay thế nhau.
+\item \textbf{$\cS$ đo chất lượng bám gần đây}, không đồng nghĩa với học trò mô phỏng đúng teacher hay phần dư
+bảo toàn co rút Lyapunov; KHÔNG diễn giải $\cS$ là ``xác suất học trò chính xác'' hay ``xác suất an toàn''.
+\item \textbf{Chỉ hiệu chỉnh trên plant danh nghĩa với gió huấn luyện}; khi plant lệch tham số hoặc với gió đo
+thực, $\cS,\cL$ \emph{chưa được hiệu chỉnh} --- chỉ được kiểm tra trong đánh giá cuối (Mục 13).
+\item \textbf{Dịch phân phối:} nhãn $\cS$ thu ở $\alpha=1$, còn triển khai $\alpha=\cS g_L(\cL)$ tạo phân phối
+trạng thái khác.
+\item \textbf{$\cL$ là xác suất thống kê}, không phải chứng nhận co rút: $\cL$ cao KHÔNG bảo đảm
+$V_{k+1}-V_k<0$; nhãn $\cL$ dùng co rút \emph{sau 20 bước}, còn Mục 12 dùng co rút \emph{từng bước}.
 \end{itemize}
 
 % ===================== 10 =====================
 \section{Bộ điều khiển đề xuất (blend triển khai)}
-Không giải NMPC trực tuyến. LQR là ``xương sống'' và được \textbf{ưu tiên}; surrogate chỉ bổ sung
-\textbf{phần dư} $\Delta u=\pi_\theta^u(z_k)$ \emph{khi được phép}. Định nghĩa \textbf{cổng do LQR điều khiển}
+Không giải NMPC trực tuyến. LQR là ``xương sống'' và được \textbf{ưu tiên}; học trò chỉ bổ sung
+\textbf{phần dư} $\Delta u=W^\star\varphi_k$ \emph{khi được phép}. Định nghĩa \textbf{cổng do LQR điều khiển}
 (theo tin cậy $\cL$):
 \[
 g_L(\cL)=\mathrm{clip}\!\left(\frac{c_{\mathrm{high}}-\cL}{\,c_{\mathrm{high}}-c_{\mathrm{low}}\,},\,0,\,1\right),
 \qquad 0\le c_{\mathrm{low}}<c_{\mathrm{high}}\le 1.
 \]
-Trọng số residual và luật điều khiển:
+Trọng số phần dư và luật điều khiển:
 \[
-\boxed{\,u \;=\; \mathrm{sat}_{\mathcal U}\!\big(\mathrm{sat}_{\mathcal U}(\uL) + \alpha\,\Delta u\big),\qquad
-\alpha \;=\; \underbrace{\cS}_{\substack{\text{surrogate}\\\text{đáng dùng?}}}\;\cdot\;
-\underbrace{g_L(\cL)}_{\substack{\text{LQR có cho}\\\text{residual chạy?}}}\,},\qquad \alpha\in[0,1].
+\boxed{\,u \;=\; \mathrm{sat}_{\mathcal U}\!\big(\mathrm{sat}_{\mathcal U}(\uL) + \alpha\,W^\star\varphi_k\big),\qquad
+\alpha \;=\; \underbrace{\cS}_{\substack{\text{học trò}\\\text{đáng dùng?}}}\;\cdot\;
+\underbrace{g_L(\cL)}_{\substack{\text{LQR có cho}\\\text{phần dư chạy?}}}\,},\qquad \alpha\in[0,1].
 \]
-Hành vi (đúng như thiết kế):
+Hành vi:
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
-\item $\cL\ge c_{\mathrm{high}}$ (LQR rất tự tin) $\Rightarrow g_L=0\Rightarrow \alpha=0\Rightarrow u=\uL$:
-\textbf{thuần LQR}, bất kể $\cS$ (cả hai cùng cao vẫn thuần LQR --- LQR ưu tiên).
-\item $\cL\le c_{\mathrm{low}}$ (LQR kém tin) và $\cS$ cao $\Rightarrow g_L=1,\ \alpha=\cS$ lớn
-$\Rightarrow$ \textbf{residual hoạt động mạnh} (surrogate sửa cho LQR); $\cS=1\Rightarrow u\approx u_{\mathrm{teacher}}$ (nếu surrogate tái tạo đúng phần dư).
-\item $\cL$ thấp nhưng $\cS$ thấp $\Rightarrow \alpha$ nhỏ $\Rightarrow$ vẫn gần LQR (không tin surrogate).
+\item $\cL\ge c_{\mathrm{high}}$ (LQR rất tự tin) $\Rightarrow g_L=0\Rightarrow \alpha=0\Rightarrow u=\mathrm{sat}(\uL)$:
+\textbf{thuần LQR}, bất kể $\cS$.
+\item $\cL\le c_{\mathrm{low}}$ (LQR kém tin) và $\cS$ cao $\Rightarrow g_L=1,\ \alpha=\cS$ lớn $\Rightarrow$
+\textbf{phần dư hoạt động mạnh}; $\alpha=1$ với $W^\star\varphi=\Delta u^*$ cho đúng lệnh teacher.
+\item $\cL$ thấp nhưng $\cS$ thấp $\Rightarrow \alpha$ nhỏ $\Rightarrow$ vẫn gần LQR.
 \end{itemize}
-Ý nghĩa: dùng LQR bất cứ khi nào nó đủ tin; chỉ nhường cho residual ở nơi \emph{LQR không chắc mà
-surrogate lại chắc}. $c_{\mathrm{low}},c_{\mathrm{high}}$ là ngưỡng thiết kế, mặc định
-$c_{\mathrm{low}}=0.3$, $c_{\mathrm{high}}=0.7$ (\texttt{D1\_C\_LOW}, \texttt{D1\_C\_HIGH}).
+$c_{\mathrm{low}},c_{\mathrm{high}}$ là ngưỡng thiết kế, mặc định $c_{\mathrm{low}}=0.3$, $c_{\mathrm{high}}=0.7$
+(\texttt{D1\_C\_LOW}, \texttt{D1\_C\_HIGH}).
 
 \noindent\textbf{Hệ quả đã biết dưới gió đều (giữ cổng này theo quyết định thiết kế).} $\cL$ đo xác suất
 $V$ của LQR giảm sau $H$ bước, không đo độ lớn sai số. Dưới lực gió gần như không đổi, sai số LQR hội tụ về
 một điểm lệch $e^*\neq0$; quanh điểm này $\Delta V_H$ dao động quanh $0$ nên $\cL$ không thấp, $g_L$ có thể
-nhỏ và phần bù gió của residual bị giảm tương ứng. Đánh giá cuối báo $\alpha$ trung bình để kiểm tra hệ quả này.
+nhỏ và phần bù gió bị giảm tương ứng. Đánh giá cuối báo $\alpha$ trung bình để kiểm tra hệ quả này.
 
 \textbf{Chi tiết theo mã:}
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
-\item Luật trộn là một hàm duy nhất \texttt{d1\_blend\_control} (\texttt{src/joint}), dùng ở mọi nơi (chế
-độ so sánh, chế độ cổng, đánh giá cuối).
+\item Luật trộn là một hàm duy nhất \texttt{d1\_blend\_control} (\texttt{src/joint}), dùng ở mọi nơi.
 \item $\uL=u_h-K(x_k-x_{\mathrm{ref},k})$ được \textbf{bão hoà trước} rồi mới cộng phần dư, và tổng được bão
-hoà lần nữa: $T\in[0,T_{\max}]$, $|\tau|\le[0.5,0.5,0.25]$. Thứ tự này khớp với nhãn
-$\Delta u^*=u_T-\mathrm{sat}(\uL)$: với $\alpha=1$ và $\widehat{\Delta u}=\Delta u^*$ thì
-$u=\mathrm{sat}(u_T)=u_T$, kể cả khi LQR bão hoà.
-\item Cần xem trước tham chiếu 10 bước ($x_{\mathrm{ref},k..k+10}$), lịch sử 4 bước và phần dư dự báo $r_k$
-để tạo $z_k$.
-\item Nếu $z_k$ không hữu hạn, hoặc đầu ra $\widehat{\Delta u}$ hay $\cS$ của mạng không hữu hạn:
-$\Delta u=0$, $\cS=0$ (tức $\alpha=0$, thuần LQR). Nếu thiếu bộ phân loại $\cL$: coi $\cL=0\Rightarrow
-g_L=1$.
+hoà lần nữa: $T\in[0,T_{\max}]$, $|\tau|\le[0.5,0.5,0.25]$; thứ tự này khớp với nhãn $u_T-\mathrm{sat}(\uL)$.
+\item Bộ nhớ của học trò chỉ gồm trạng thái và lệnh của bước trước (cho $\hat F$); đặt lại ở đầu chuyến và sau
+mỗi lần phân kỳ (\texttt{d1\_student\_init/push}).
+\item Không có file tin cậy $\Rightarrow$ $\cS=0$ (thuần LQR); đặc trưng hay đầu ra không hữu hạn $\Rightarrow$
+$\Delta u=0$. Thiếu $\cL$ $\Rightarrow$ coi $\cL=0$, $g_L=1$.
 \item Tuỳ chọn \texttt{D1\_ALPHA\_SAFE=1}: $\alpha\leftarrow\min\{\alpha,(1-\varepsilon)\bar\alpha\}$,
 $\varepsilon=0.1$ (Mệnh đề~\ref{prop2}); mặc định tắt.
 \end{itemize}
 
 \noindent\emph{Lưu ý:} đây là \textbf{cơ chế lựa chọn điều khiển dựa trên dữ liệu}, KHÔNG phải cơ chế
-chứng nhận Lyapunov. Luật này không tự bảo đảm $\alpha\le\bar\alpha(e,d)$ (ngân sách co rút ở Mục 12), nên
-tính ổn định của bộ điều khiển lai chỉ có ở dạng \emph{điều kiện đủ có điều kiện} (Mục 12), trừ khi bổ
-sung cơ chế giới hạn $\alpha_{\mathrm{safe}}$ (Mệnh đề~\ref{prop2}).
+chứng nhận Lyapunov (Mục 12). Kiểm tra $\rho(A_\alpha)$ ở Mục 9 là điều kiện cần trên mô hình tuyến tính hoá
+với $\alpha$ cố định.
 
 % ===================== 11 =====================
 \section{Phân tích co rút (điều kiện đủ, KHÔNG phải bảo chứng cho luật lai)}
@@ -778,49 +750,42 @@ Systems} (2002).
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
 \item \textbf{Bám quỹ đạo}: RMSE và max của sai số vị trí đã chặn $5$ m (Mục 4.1; căn lề bước $k$ so với
 $x_{\mathrm{ref},k+1}$, bước phân kỳ tính $5$ m), kèm số lần đặt lại do phân kỳ.
-\item \textbf{Huấn luyện (Khối A)}: reward trung bình mỗi iter, số mẫu surrogate tích luỹ,
-$\alpha_{\mathrm{ent}}$.
-\item \textbf{Khối B}: $\cL$ --- độ chính xác phân loại, tỉ lệ nền co rút, số mẫu; $\cS$ --- số mẫu, trung
-bình nhãn $s_k$ và trung bình dự đoán (hồi quy, không phải phân loại).
-\item \textbf{So sánh} (\texttt{D1\_COMPARE=1}): mỗi họ 1 quỹ đạo lấy từ ngân hàng huấn luyện (mức giữa, hoặc
-khó nhất với \texttt{D1\_HARD=1}); 4 bộ điều khiển trên cùng plant: LQR, teacher SAC-NMPC (trọng số
-$a=\tanh(\mu)$, biết gió hiện tại như khi huấn luyện), surrogate $\alpha=1$, blend. Chỉ số: RMSE và max sai số vị trí, số lần đặt lại, $\alpha$
-trung bình, tỉ lệ SQP hội tụ của teacher. Plant danh nghĩa hoặc \textbf{off-nominal}:
-$\theta=\theta_{\mathrm{nom}}\odot(1+s\,\xi\odot\rho_{\mathrm{train}})$, $\xi\sim\mathcal{U}[-1,1]^{14}$
-theo seed, $s=$ \texttt{D1\_PLANT\_PERTURB} (cùng plant cho cả 4 bộ); gió huấn luyện, một mẫu cho mỗi quỹ
-đạo.
-\item \textbf{Đánh giá surrogate} (\texttt{D1\_SURR\_EVAL=1}): surrogate $\alpha=1$ trên 6 quỹ đạo, gió huấn
-luyện: sai số vị trí trung vị/lớn nhất, số lần đặt lại, $\cS$ trung bình.
-\item \textbf{Cổng} (\texttt{D1\_GATE\_GRID=1}): RMSE vị trí của LQR và blend cho một cặp
-$(c_{\mathrm{low}},c_{\mathrm{high}})$, gió huấn luyện, không cần teacher.
-\item \textbf{Chẩn đoán} (\texttt{D1\_DIAG=1}): teacher (trọng số Bryson, biết gió hiện tại) và LQR trên 4
-quỹ đạo, gió huấn luyện: sai số trung vị/lớn nhất, tỉ lệ SQP hội tụ, số lần đặt lại.
+\item \textbf{Pha SAC}: reward trung bình mỗi iter, tỉ lệ lời giải dùng được, $\alpha_{\mathrm{ent}}$; mỗi quỹ đạo:
+tỉ lệ status, số lần hết giờ, thời gian giải lớn nhất và p99.
+\item \textbf{Pha DAgger}: mỗi vòng: số nhãn, $\lambda$, MSE kiểm định chéo, $\rho_{\max}$, RMSE kiểm định; ứng
+viên được chọn; $\cL$ --- độ chính xác, tỉ lệ nền co rút; $\cS$ --- số mẫu, trung bình nhãn $s_k$.
+\item \textbf{So sánh} (\texttt{D1\_COMPARE=1}): mỗi họ 1 quỹ đạo của ngân hàng (mức giữa, hoặc khó nhất với
+\texttt{D1\_HARD=1}); 4 bộ trên cùng plant và cùng mẫu gió: LQR, teacher SAC-NMPC ($a=\tanh(\mu)$, biết gió), học
+trò $\alpha=1$, blend. Plant danh nghĩa hoặc \textbf{off-nominal}
+$\theta=\theta_{\mathrm{nom}}\odot(1+s\,\xi\odot\rho_{\mathrm{train}})$, $s=$ \texttt{D1\_PLANT\_PERTURB}.
+\item \textbf{Đánh giá học trò} (\texttt{D1\_SURR\_EVAL=1}): học trò $\alpha=1$ và blend trên 6 quỹ đạo, gió huấn
+luyện, không cần teacher.
+\item \textbf{Cổng} (\texttt{D1\_GATE\_GRID=1}): RMSE của LQR và blend cho một cặp
+$(c_{\mathrm{low}},c_{\mathrm{high}})$, không cần teacher.
+\item \textbf{Tính lại tin cậy} (\texttt{D1\_CONSOLIDATE=1}): học lại $\cS,\cL$ cho file học trò có sẵn.
+\item \textbf{Chẩn đoán} (\texttt{D1\_DIAG=1}): teacher (Bryson, biết gió) và LQR trên 4 quỹ đạo.
 \end{itemize}
-Mọi chế độ trên đều theo quy tắc bay chung của Mục 4.1; surrogate và tin cậy dùng cho blend/$\cS$ đều lấy từ
-file \texttt{conf} (bộ điều khiển triển khai, Mục 2).
-Chỉ số co rút ($\Delta V_H$, $g_H$) chỉ được tính nội bộ để tạo nhãn $\cL$ (và chẩn đoán ở Khối A), không
-được báo như chỉ số đánh giá.
+Các chế độ trên dùng file học trò \texttt{student\_seed<s><suffix>.mat} và theo quy tắc bay chung (Mục 4.1).
+Chỉ số co rút ($\Delta V_H$, $g_H$) chỉ dùng nội bộ để tạo nhãn $\cL$ và chẩn đoán.
 
 \subsection{Đánh giá cuối với gió đo thực (\texttt{experiments/d1\_final\_eval.m})}
-Script riêng, chạy bằng workflow \texttt{d1-final-eval.yml}; mỗi chain được đánh giá tại checkpoint mốc chỉ
-định (checkpoint cho trọng số teacher, file \texttt{conf} cùng mốc cho surrogate và tin cậy --- bắt buộc phải
-có để chạy P). Script gọi đúng các hàm dùng chung của \texttt{src/joint} (không có bản sao). \textbf{Mọi bộ
-điều khiển chỉ biết mô hình danh nghĩa}; plant thật là mẫu LHS của repo mà bộ điều khiển không biết.
+Script riêng, chạy bằng workflow \texttt{d1-final-eval.yml}; mỗi chain được đánh giá tại mốc chỉ định: checkpoint
+SAC (\texttt{D1\_CKPT}) cho teacher và file học trò cùng mốc (\texttt{D1\_STUDENT}; bắt buộc để chạy P; phải
+thuộc đúng iter của checkpoint). \texttt{run} của chain là run DAgger (artifact của nó chứa cả hai). Script gọi
+đúng các hàm dùng chung của \texttt{src/joint}. \textbf{Mọi bộ điều khiển chỉ biết mô hình danh nghĩa}; plant
+thật là mẫu LHS của repo mà bộ điều khiển không biết.
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
 \item \textbf{Bộ điều khiển.} LQR (Mục 6); \textbf{LQI}: tăng cường $z_{k+1}=z_k+T_s\,e_{\mathrm{pos},k}$,
 $Q_{\mathrm{aug}}=\mathrm{blkdiag}(Q_0,\ I/z_{\mathrm{allow}}^2)$ với $z_{\mathrm{allow}}=0.1$ m$\times1$ s,
-$R_0$, giải DARE $\to[K_x,K_I]$, $u=\mathrm{sat}(u_h-K_xe-K_Iz)$, anti-windup kiểu kẹp (chỉ tích phân ở bước
-không có kênh nào bão hoà); \textbf{MPC tuyến tính} $N=5$: mô hình $x_{j+1}=A_dx_j+B_d(u_j-u_h)$ (cùng mô
-hình của LQR), chi phí $\sum_{j=1}^{N-1}\norm{x_j-r_{k+j}}_{Q_0}^2+\norm{x_N-r_{k+N}}_{S}^2
-+\sum_{j=0}^{N-1}\norm{u_j-u_h}_{R_0}^2$ ($S$ từ DARE), chặn hộp đầu vào, QP dạng thu gọn giải bằng
-active-set KWIK có warm start; \textbf{Teacher} của từng chain (trọng số $a=\tanh(\mu)$ của checkpoint, kịch
-bản theo seed, \texttt{SQP}, Mục 7) được cho biết \emph{đúng} lực gió đo thực tại mỗi bước --- đây là
-\textbf{cận trên (oracle)}, không phải bộ điều khiển triển khai được; \textbf{P}: bộ điều khiển đề xuất
-(\texttt{d1\_blend\_control}, Mục 11), \textbf{không} biết gió. Biến thể ``proposed $+$ I'' (blend trên nền
-LQI) \textbf{không} được đánh giá: $\Delta u$ được học so với nền LQR, cộng lên nền LQI là sai nền.
+$R_0$, giải DARE $\to[K_x,K_I]$, $u=\mathrm{sat}(u_h-K_xe-K_Iz)$, anti-windup kiểu kẹp; \textbf{MPC tuyến tính}
+$N=5$: mô hình $x_{j+1}=A_dx_j+B_d(u_j-u_h)$, chi phí $\sum_{j=1}^{N-1}\norm{x_j-r_{k+j}}_{Q_0}^2+\norm{x_N-r_{k+N}}_{S}^2
++\sum_{j=0}^{N-1}\norm{u_j-u_h}_{R_0}^2$, chặn hộp đầu vào, QP thu gọn giải bằng active-set KWIK có warm start;
+\textbf{Teacher} của chain (trọng số $a=\tanh(\mu)$, kịch bản theo seed, \texttt{SQP}, giới hạn 2 s mỗi lần giải)
+được cho biết \emph{đúng} lực gió đo thực tại mỗi bước --- \textbf{cận trên (oracle)}, không triển khai được;
+\textbf{P}: bộ điều khiển đề xuất (\texttt{d1\_blend\_control} với $W^\star$ và tin cậy), \textbf{không} biết gió.
 \item \textbf{Điều kiện.} ``train'': 5 plant LHS mức $\rho_{\mathrm{train}}$ $\times$ 15 quỹ đạo từ ngân
 hàng (5 họ $\times$ $\{v4/a2,\ v8/a5,\ v12/a9\}$); ``ood'': 5 plant LHS mức $\rho_{\mathrm{ood}}$ $\times$
-10 quỹ đạo $14,16$ m/s, $a=9$ (5 họ). Mỗi cặp (quỹ đạo, plant) bay với 2 chuỗi gió đo thực, xoay vòng qua
+10 quỹ đạo $14,16$ m/s, $a=9$. Mỗi cặp (quỹ đạo, plant) bay với 2 chuỗi gió đo thực, xoay vòng qua
 toàn bộ chuỗi: $150$ chuyến (train), $100$ chuyến (ood), mỗi chuyến $979$ bước.
 \item \textbf{Gió đo thực (chỉ để kiểm chứng).} Neural-Fly (O'Connell et al., 2022): lực khí động dư đo trên
 quadrotor $2.53$ kg trong hầm gió $1.3$--$12.1$ m/s; dùng $F=(m/2.53)\,(f_a-\bar f_a^{\,\mathrm{no\,wind}})$.
@@ -828,17 +793,13 @@ SWUF-3D (Zenodo 17700905): gió 3D đo bằng sonic ngoài trời; quy ra lực
 $F=(m/2.53)(c_1+c_2\norm{w})\,w$ với $(c_1,c_2)$ khớp bình phương tối thiểu trên lực trung bình của Neural-Fly
 ở các mức gió ổn định; lấy $49$ s đầu. Dữ liệu được tải trong job CI, không lưu vào repo hay artifact.
 \item \textbf{Chỉ số} (mỗi chuyến $\times$ bộ điều khiển): RMSE và max sai số vị trí, RMSE vận tốc, tỉ số tốc
-độ trung bình, RMS gia số lệnh đã chuẩn hoá, thời gian tính mỗi bước (trung vị/p99/max, cùng loại máy),
-$\alpha$ trung bình, tỉ lệ hội tụ SQP của teacher, số lần đặt lại do phân kỳ; bảng tổng hợp
-(\texttt{tools/\allowbreak eval/\allowbreak summarize\_\allowbreak final\_\allowbreak eval.py}) đếm thêm số chuyến mỗi bộ thắng LQR và thắng LQI trên cùng
-chuyến. Thời gian của teacher gồm cả tính tham chiếu nhất quán với gió. Mọi chuyến bay đủ $979$ bước
-theo quy tắc bay chung (Mục 4.1); sai số vị trí là sai số đã chặn $5$ m; RMSE vận tốc, tỉ số tốc độ và RMS gia
-số lệnh tính trên các bước không phân kỳ. Một chuyến được tính là \emph{hoàn thành} khi không có lần đặt lại
-nào và sai số chưa lần nào chạm mức chặn $5$ m. Ngoài CSV, lưu quỹ đạo đầy đủ của một chuyến đại diện cho mỗi
-họ (mức khó nhất, plant 1, chuỗi gió đầu) để vẽ hình.
+độ trung bình, RMS gia số lệnh đã chuẩn hoá, thời gian tính mỗi bước (trung vị/p99/max), $\alpha$ trung bình, tỉ
+lệ hội tụ SQP của teacher, số lần đặt lại do phân kỳ; bảng tổng hợp
+(\texttt{tools/\allowbreak eval/\allowbreak summarize\_\allowbreak final\_\allowbreak eval.py}) đếm thêm số chuyến
+mỗi bộ thắng LQR và thắng LQI. Thời gian của teacher gồm cả tính tham chiếu nhất quán với gió. Một chuyến
+\emph{hoàn thành} khi không có lần đặt lại nào và sai số chưa lần nào chạm mức chặn $5$ m. Lưu thêm quỹ đạo đầy
+đủ của một chuyến đại diện cho mỗi họ để vẽ hình.
 \end{itemize}
-Đây là script đánh giá duy nhất; bản đánh giá gió cũ không có teacher (\texttt{d1\_wind\_eval.m}) đã được gỡ
-bỏ để mọi kết quả dùng cùng một bộ quy tắc.
 
 % ===================== 13 =====================
 \section{Bảng tham số cố định}
@@ -848,43 +809,35 @@ bỏ để mọi kết quả dùng cùng một bộ quy tắc.
 \textbf{Tham số} & \textbf{Ký hiệu} & \textbf{Giá trị}\\
 \midrule
 Bước thời gian & $T_s$ & $0.05$ s\\
-Chân trời dự báo & $N$ & $20$\\
-Chân trời điều khiển & $N_c$ & $5$ (move-blocking)\\
+Chân trời dự báo / điều khiển & $N$ / $N_c$ & $20$ / $5$ (move-blocking)\\
 Số kịch bản robust & $M$ & $5$\\
 Cửa sổ co rút & $H$ & $20$ bước ($1.0$ s)\\
-Trọng số cuối kỳ & $Q_f$ & $Q_0$ (Bryson), cố định, SAC không chỉnh\\
-Phạt $\delta u$ & $dU$ & $0$\\
-Solver NLP & -- & \texttt{SQP} ($\le50$ vòng; mặc định, dùng cho mọi run) / \texttt{SQP\_RTI} (tuỳ chọn); acados ghim commit \texttt{3edf443}\\
+Trọng số cuối kỳ & $Q_f$ & $Q_0$ (Bryson), cố định\\
+Solver NLP & -- & \texttt{SQP} ($\le50$ vòng), giới hạn $2$ s mỗi lần giải; acados ghim \texttt{3edf443}\\
 Thông tin gió của teacher & $F_k$ & lực gió hiện tại (đặc quyền), giữ không đổi trên tầm dự báo\\
 Tham chiếu của teacher & $(\bar x,\bar u)$ & flatness danh nghĩa với lực đẩy $m(a+ge_3)+D_vv-F_k$\\
-Áp nghiệm teacher & -- & status $0$ hoặc $2$ và hữu hạn; nếu không: giữ lệnh cũ, đặt lại solver\\
+Áp nghiệm teacher & -- & status $0$ hoặc $2$ và hữu hạn; nếu không (kể cả hết giờ): giữ lệnh cũ, đặt lại solver\\
 Tỉ lệ thất bại (reward) & $r_{\mathrm{fail}}$ & tỉ lệ bước giải không dùng được\\
-Đặt lại solver & -- & đầu mỗi quỹ đạo, sau lần giải không dùng được, sau lần đặt lại do phân kỳ\\
 Phân kỳ & -- & lỗi tích phân, không hữu hạn hoặc $\norm{p}>10^4$ m; đặt lại trên tham chiếu, bay đủ\\
 Sai số bám & $e_k$ & chặn $5$ m; bước phân kỳ $=5$ m\\
-Resume & -- & đến mức từng quỹ đạo (iter dở dang lưu trong checkpoint)\\
 Độ dài mỗi quỹ đạo & -- & 1000 điểm ($50$ s); mọi lượt bay 979 bước\\
-Đầu vào surrogate & $z_k$ & $x_{k-3..k}$, $u_{k-4..k-1}$, $x_{\mathrm{ref},k..k+10}$, $r_k$ (208)\\
-Thang phần dư dự báo & -- & đáp ứng 1 bước với $a_{\max}=6.71$ m/s$^2$ và $\alpha_\tau\tau_{\max}/J$\\
 Một lần chấm SAC & -- & 20 quỹ đạo rút có hoàn lại từ 120\\
 Môi trường huấn luyện & -- & plant danh nghĩa $+$ gió ngẫu nhiên, không nhiễu cảm biến\\
-Gió trung bình & $U$ & $\mathcal U[1,10]$ m/s, phương ngang, hướng $\mathcal U[0,2\pi)$\\
-Gió giật & -- & Dryden độ cao thấp, $h=20$ ft, $\sigma_w=0.1U$\\
-Lực gió (rotor drag) & $d_x,d_y,d_z$ & $0.425,\ 0.256,\ 0$ s$^{-1}$ (Faessler et al. 2018)\\
-Checkpoint mốc & -- & mỗi $50$ iter (\texttt{D1\_CKPT\_EVERY\_ITER}), kèm tin cậy riêng\\
-Dừng đúng iter & -- & \texttt{D1\_STOP\_ITER} ($0$ = tắt)\\
-Hạt giống & seed & mặc định $260914001$; workflow mặc định chạy song song $260914001\dots005$\\
+Gió & $U$; gió giật; lực & $\mathcal U[1,10]$ m/s; Dryden $h=20$ ft; rotor drag $0.425,0.256,0$ s$^{-1}$\\
+Checkpoint mốc / dừng & -- & mỗi $50$ iter (chỉ SAC/teacher); \texttt{D1\_STOP\_ITER}\\
 Dải tìm $Q,R$ của SAC & $d$ & $10^{\pm d}$ quanh Bryson, $d=1.5$ mặc định\\
 SAC & lr/$\gamma$/batch/buffer & $3{\times}10^{-4}$ / 0 / 256 / $5{\times}10^{4}$; bắt đầu học từ iter 64\\
-Surrogate & lr/batch/buffer & $10^{-3}$ / 256 / $10^{5}$; 50\% mẫu từ 3 iter gần nhất\\
-Huấn luyện $\cS$ & -- & 40 quỹ đạo, $\alpha=1$; 300 bước Adam, chỉ lớp cuối\\
+Học trò & $W$ & $4\times27$, không bias; $\varphi=[e;\hat F;\bar u_k;\bar u_{k+5}-\bar u_k;\bar u_{k+20}-\bar u_k]$\\
+DAgger & $N_D$, chuyến/vòng & $10$, $20$; $\beta_1=1$, sau đó học trò bay ($\alpha=1$); dòng ngẫu nhiên seed$+9900$\\
+Ridge & $\lambda$ & lưới $10^{-6..2}$, CV 5 phần theo chuyến bay; đặc trưng chia RMS\\
+Nhãn DAgger & -- & lời giải dùng được, sai số vị trí $<5$ m, $|\phi|,|\theta|\le1.35$ rad\\
+Tập kiểm định & $\mathcal V$ & 15 chuyến (họ $\times$ gia tốc), gió từ \texttt{RandStream(seed+7700)}\\
+Ổn định & $\rho(A_\alpha)$ & $<1$ trên $\alpha\in\{0,0.001,\dots,1\}$; không đạt thì loại\\
+Huấn luyện $\cS$ & -- & 40 quỹ đạo học trò $\alpha=1$; logistic nhãn mềm, 18 đặc trưng\\
 Huấn luyện $\cL$ & -- & 60 quỹ đạo LQR; logistic L2 ($\lambda=10^{-3}$), 800 bước\\
-Trọng số khởi tạo & $Q,R$ & Bryson (Mục 6.2)\\
-Luật triển khai & $u$ & $\mathrm{sat}(\mathrm{sat}(\uL)+\alpha\Delta u)$\\
-Trọng số residual triển khai & $\alpha$ & $\cS\cdot g_L(\cL)$\\
-Ngưỡng cổng LQR & $c_{\mathrm{low}},c_{\mathrm{high}}$ & $0.3,\ 0.7$ (mặc định)\\
-Thang sai số cho $\cS$ & $\varepsilon_p$ & $0.5$ m\\
-Cửa sổ RMS của $\cS$ & -- & 20 bước VỪA QUA (past window)\\
+Luật triển khai & $u$ & $\mathrm{sat}(\mathrm{sat}(\uL)+\alpha W^\star\varphi)$, $\alpha=\cS\, g_L(\cL)$\\
+Ngưỡng cổng LQR & $c_{\mathrm{low}},c_{\mathrm{high}}$ & $0.3,\ 0.7$\\
+Thang sai số cho $\cS$ & $\varepsilon_p$ & $0.5$ m (cửa sổ 20 bước VỪA QUA)\\
 Chặn an toàn (tuỳ chọn) & $\varepsilon$ & $0.1$, bật bằng \texttt{D1\_ALPHA\_SAFE=1}\\
 \bottomrule
 \end{tabular}

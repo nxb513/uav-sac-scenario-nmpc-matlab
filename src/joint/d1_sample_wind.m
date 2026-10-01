@@ -1,4 +1,4 @@
-function ds = d1_sample_wind(cfg, T)
+function ds = d1_sample_wind(cfg, T, rs)
 %D1_SAMPLE_WIND One random training-wind realization for a flight of T steps (synthetic;
 % NO measured wind data is used in training).
 %  mean   : U ~ Uniform[windMin, windMax] m/s, horizontal, azimuth ~ Uniform[0, 2*pi)
@@ -8,16 +8,19 @@ function ds = d1_sample_wind(cfg, T)
 %           0.61 kg quadrotor): F = m R diag(windDrag) R' w, world frame (m = nominal mass;
 %           an aerodynamic force, the plant divides by its true mass)
 % Returns the disturbance handle ds(t, x, u, theta) used by quad_dynamics.
-U = cfg.windMin + (cfg.windMax - cfg.windMin)*rand;
-psi = 2*pi*rand;
+% rs (optional): a RandStream to draw from instead of the global stream (validation winds).
+if nargin < 3, urand = @() rand; nrand = @() randn;
+else, urand = @() rand(rs); nrand = @() randn(rs); end
+U = cfg.windMin + (cfg.windMax - cfg.windMin)*urand();
+psi = 2*pi*urand();
 [sg, L] = d1_dryden(U, cfg);
 tau = L/U;
 dt = cfg.Ts/2; n = 2*T + 5; tt = (0:n-1)*dt;
 g = zeros(3, n);
 for i = 1:3
     ph = exp(-dt/tau(i)); q = sg(i)*sqrt(1 - ph^2);
-    g(i,1) = sg(i)*randn;
-    for j = 2:n, g(i,j) = ph*g(i,j-1) + q*randn; end
+    g(i,1) = sg(i)*nrand();
+    for j = 2:n, g(i,j) = ph*g(i,j-1) + q*nrand(); end
 end
 c = cos(psi); s = sin(psi);
 W = [c*(U + g(1,:)) - s*g(2,:); s*(U + g(1,:)) + c*g(2,:); g(3,:)];   % (u,v,w) -> world

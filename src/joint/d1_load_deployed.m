@@ -1,17 +1,15 @@
-function [sur, conf] = d1_load_deployed(S, confFile, required)
-%D1_LOAD_DEPLOYED The deployed controller of a checkpoint = the consolidated surrogate and
-% conf saved TOGETHER in conf_seed<s>[_iter<NNNN>].mat by the pipeline's consolidation.
-% S: loaded checkpoint struct. required = true (final evaluation) -> a missing conf file is
-% an error; otherwise (diagnostics) the training surrogate is used with an untrained c_S
-% head and no c_LQR (g_L = 1), with a warning.
-if nargin < 3, required = false; end
-sur = S.sur; conf = [];
-if ~isempty(confFile) && isfile(confFile)
-    C = load(confFile); conf = C.conf;
-    if isfield(C, 'sur'), sur = C.sur; end
+function [stu, conf] = d1_load_deployed(studentFile, required)
+%D1_LOAD_DEPLOYED The deployed controller = the DAgger student (stu.W) and its confidences
+% (conf.S, conf.LQR), saved together in student_seed<s>[_iter<NNNN>].mat by d1_dagger_run.
+% required = true (final evaluation) -> a missing file is an error; otherwise returns empty
+% (callers then fly LQR only) with a warning.
+if nargin < 2, required = false; end
+stu = []; conf = [];
+if ~isempty(studentFile) && isfile(studentFile)
+    C = load(studentFile); stu = C.stu; conf = C.conf;
 elseif required
-    error('d1_load_deployed:noconf', 'deployed pair (conf file) missing: %s', confFile);
+    error('d1_load_deployed:nostudent', 'deployed student file missing: %s', studentFile);
 else
-    fprintf('WARN no conf file (%s): training surrogate, untrained c_S head, no c_LQR (g_L = 1)\n', confFile);
+    fprintf('WARN no student file (%s): the proposed controller is not available\n', studentFile);
 end
 end

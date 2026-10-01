@@ -12,8 +12,8 @@ function d1_final_eval()
 %            from the chain seed, N=20, Nc=5, D1_SOLVER) with Q,R = d1_action_to_QR(tanh(mu)),
 %            told the exact current wind force (privileged, not deployable) -- d1_teacher_step
 %   P        proposed controller (deployed): d1_blend_control on the LQR base with the
-%            chain's consolidated surrogate + conf; it does NOT know the wind (it infers the
-%            disturbance from its history feature, d1_hist_*)
+%            chain's DAgger student Du = W*phi and its confidences (student file); it does
+%            NOT know the wind (it uses the force estimate F_hat of d1_student_feature)
 % Every flight uses the common flight rules of the training pipeline (src/joint/d1_*):
 % real time, d1_case_len steps, a divergence restarts the plant on the reference (controller
 % state reset) and is counted; per-step position error capped at 5 m (d1_track_err), a
@@ -25,8 +25,8 @@ function d1_final_eval()
 % Each (reference, plant) pair is flown with 2 real-wind series, cycled over all series
 % in D1_WIND_DIR (tools/wind/prepare_wind_series.py): train 150, ood 100 flights.
 % The chain (seed, random QR base, SAC width) comes from D1_SEED / D1_RANDOM_QR /
-% D1_LOGMULT_DEC exactly as in training; D1_CKPT is its checkpoint and D1_CONF its
-% deployed pair (required for P).
+% D1_LOGMULT_DEC exactly as in training; D1_CKPT is its SAC checkpoint (teacher) and
+% D1_STUDENT its student file student_seed<s><suffix>.mat (required for P).
 %
 % Outputs (D1_OUT): final_eval_<cond>_<tag>_<k>of<K>.csv (one row per flight x ctrl)
 % and final_traj_<cond>_<tag>_<k>of<K>.mat (full trajectories of one representative
@@ -39,16 +39,17 @@ ctrls = strtrim(strsplit(d1_getenv_str('D1_CTRLS', 'LQR,LQI,MPC'), ','));
 kindOf = containers.Map({'LQR','LQI','MPC','Teacher','P'}, {'L','Q','M','T','P'});
 assert(all(isKey(kindOf, ctrls)), 'd1_final_eval:ctrl', 'unknown controller in D1_CTRLS');
 tag = d1_getenv_str('D1_TAG', 'base'); cond = d1_getenv_str('D1_COND', 'train');
-sur = []; conf = []; teacher = []; mp = []; ckIter = NaN;
+stu = []; conf = []; teacher = []; mp = []; ckIter = NaN;
 if any(ismember(ctrls, {'Teacher', 'P'}))
     S = load(getenv('D1_CKPT')); ckIter = S.st.iter;
-    fprintf('CKPT seed=%d iter=%d samples=%d\n', cfg.seed, S.st.iter, S.st.totalSamples);
+    fprintf('CKPT seed=%d iter=%d\n', cfg.seed, S.st.iter);
 end
 if any(strcmp(ctrls, 'P'))
-    [sur, conf] = d1_load_deployed(S, d1_getenv_str('D1_CONF', ''), true);
-    L = sur.net.Learnables; nb = 0; nt = 0;
-    for q = 1:height(L), v = extractdata(L.Value{q}); nb = nb + sum(~isfinite(v(:))); nt = nt + numel(v); end
-    fprintf('DEPLOYED pair conf.iter=%d | surrogate non-finite params %d/%d\n', conf.iter, nb, nt);
+    [stu, conf] = d1_load_deployed(d1_getenv_str('D1_STUDENT', ''), true);
+    assert(stu.ckptIter == ckIter, 'student (teacher iter %d) does not belong to checkpoint iter %d', ...
+        stu.ckptIter, ckIter);
+    fprintf('STUDENT candidate %d lambda=%.0e rho_max=%.4f val_pos=%.4f | finite W: %d\n', ...
+        stu.selected, stu.lambda, stu.rho, stu.val, all(isfinite(stu.W(:))));
 end
 if any(strcmp(ctrls, 'Teacher'))
     teacher = d1_teacher_build_solver(cfg, scen);
@@ -67,7 +68,7 @@ rows = {}; TR = struct('flight',{},'family',{},'id',{},'ctrl',{},'X',{},'U',{},'
 for i = sel
     f = F(i); ln = sprintf('FL %4d %-5s %-50s', i, cond, f.id);
     for c = 1:numel(ctrls)
-        [X, U, tm, aux, conv, nDiv] = fly_one(kindOf(ctrls{c}), f, cfg, lqr, sur, conf, KI, KxLQI, mp, teacher);
+        [X, U, tm, aux, conv, nDiv] = fly_one(kindOf(ctrls{c}), f, cfg, lqr, stu, conf, KI, KxLQI, mp, teacher);
         Xr = f.Xref(:, 2:size(X,2)+1); m = metr(X, U, Xr, tm, cfg, nDiv);
         a = mean(aux(isfinite(aux))); cv = mean(conv(isfinite(conv)));
         ln = [ln sprintf(' | %s %s pos=%.4f vel=%.4f pmax=%.3f restarts=%d tmed=%.1f aux=%.2f', ...
@@ -103,14 +104,14 @@ for j = 1:numel(fl)
     [~, wn{j}] = fileparts(fl(j).name);
 end
 pc = step1_plant_config(); nom = cfg.plant.nominal;
-refs = struct('Xref',{},'family',{},'level',{},'id',{});
+refs = struct('Xref',{},'Uref',{},'family',{},'level',{},'id',{});
 if strcmp(cond, 'train')
     cases = d1_train_cases(cfg); lv = {[4 2], [8 5], [12 9]};
     for i = 1:numel(cases)
         tk = regexp(cases(i).groupId, '^([^|]+)\|v([\d.]+)\|a([\d.]+)', 'tokens', 'once');
         va = [str2double(tk{2}), str2double(tk{3})];
         if any(cellfun(@(q) isequal(q, va), lv))
-            refs(end+1) = struct('Xref', cases(i).Xref, 'family', tk{1}, ...
+            refs(end+1) = struct('Xref', cases(i).Xref, 'Uref', cases(i).Uref, 'family', tk{1}, ...
                 'level', sprintf('v%g/a%g', va), 'id', cases(i).groupId); %#ok<AGROW>
         end
     end
@@ -120,14 +121,14 @@ elseif strcmp(cond, 'ood')
     o = make_ood_refs(cfg, ref, nom, ref.candidateOodSpeedAnchors, 9.0);
     for i = 1:numel(o)
         tk = regexp(o(i).groupId, '^([^|]+)\|v([\d.]+)\|a([\d.]+)', 'tokens', 'once');
-        refs(end+1) = struct('Xref', o(i).Xref, 'family', tk{1}, ...
+        refs(end+1) = struct('Xref', o(i).Xref, 'Uref', o(i).Uref, 'family', tk{1}, ...
             'level', sprintf('v%s/a%s', tk{2}, tk{3}), 'id', o(i).groupId); %#ok<AGROW>
     end
     plants = quad_sample_uncertainty(pc, 5, 'ood', pc.uncertainty.defaultSeed, 'lhs'); hardest = 'v16/a9';
 else
     error('d1_final_eval:cond', 'D1_COND must be train or ood');
 end
-F = struct('id',{},'family',{},'level',{},'ref',{},'plant',{},'wind',{},'rep',{},'Xref',{},'theta',{},'ds',{});
+F = struct('id',{},'family',{},'level',{},'ref',{},'plant',{},'wind',{},'rep',{},'Xref',{},'Uref',{},'theta',{},'ds',{});
 q = 0;
 for r = 1:numel(refs)
     for p = 1:numel(plants)
@@ -137,7 +138,7 @@ for r = 1:numel(refs)
             F(end+1) = struct('id', sprintf('%s p%d %s', refs(r).id, p, wn{w}), 'family', refs(r).family, ...
                 'level', refs(r).level, 'ref', refs(r).id, 'plant', sprintf('p%d', p), 'wind', wn{w}, ...
                 'rep', strcmp(refs(r).level, hardest) && p == 1 && j == 1, ...
-                'Xref', refs(r).Xref, 'theta', plants(p), 'ds', W{w}); %#ok<AGROW>
+                'Xref', refs(r).Xref, 'Uref', refs(r).Uref, 'theta', plants(p), 'ds', W{w}); %#ok<AGROW>
         end
     end
 end
@@ -173,15 +174,15 @@ ds = @(t, x, u, th) struct('force', [Gx(t); Gy(t); Gz(t)], 'torque', zeros(3,1))
 end
 
 % ---- closed-loop flight ---------------------------------------------------------
-function [X, U, tm, aux, conv, nDiv] = fly_one(kind, f, cfg, lqr, sur, conf, KI, KxLQI, mp, teacher)
+function [X, U, tm, aux, conv, nDiv] = fly_one(kind, f, cfg, lqr, stu, conf, KI, KxLQI, mp, teacher)
 % One flight with the COMMON flight rules of the training pipeline: real time (k-1)*Ts,
 % d1_plant_step, d1_case_len steps; after a divergence the plant restarts on the
-% reference and the controller's internal state (history, u_prev, integrator z, solver /
+% reference and the controller's internal state (student memory, u_prev, integrator z, solver /
 % active set) is reset. Diverged steps stay NaN in X; nDiv counts restarts. tm = time of
 % the control computation only (for the teacher incl. its wind-consistent target).
 Ts = cfg.Ts; uh = cfg.uh; Xref = f.Xref; T = d1_case_len(Xref, cfg);
 X = nan(12,T); U = nan(4,T); tm = nan(1,T); aux = nan(1,T); conv = nan(1,T); nDiv = 0;
-x = Xref(:,1); h = d1_hist_init(x, cfg); zI = zeros(3,1); uprev = uh;
+x = Xref(:,1); s = d1_student_init(x, cfg); zI = zeros(3,1); uprev = uh;
 if kind == 'M', ws.iA = false(size(mp.bin)); end
 if kind == 'T', d1_teacher_reset(teacher, Xref, 1, cfg); end     % clean solver per flight
 for k = 1:T
@@ -200,18 +201,19 @@ for k = 1:T
         case 'T'   % identical to training: d1_teacher_step (reset after an unusable solve)
             [u, status] = d1_teacher_step(teacher, x, uprev, Xref, k, Fk, cfg); conv(k) = (status == 0);
             u = d1_sat(u, cfg); uprev = u;
-        case 'P'   % proposed: d1_blend_control on the LQR base
-            [u, aux(k)] = d1_blend_control(uh - lqr.K*e, e, h, Xref(:,k:k+10), sur, conf, lqr, cfg);
+        case 'P'   % proposed: d1_blend_control on the LQR base (linear student)
+            phi = d1_student_feature(s, x, k, Xref, f.Uref, cfg);
+            [u, aux(k)] = d1_blend_control(uh - lqr.K*e, e, phi, stu, conf, lqr, cfg);
     end
     tm(k) = toc(t0); U(:,k) = u;
     [xNew, div] = d1_plant_step(t, x, u, Ts, f.theta, f.ds);
     if div
         nDiv = nDiv + 1; x = Xref(:,k+1);
-        h = d1_hist_init(x, cfg); zI = zeros(3,1); uprev = uh;
+        s = d1_student_init(x, cfg); zI = zeros(3,1); uprev = uh;
         if kind == 'M', ws.iA = false(size(mp.bin)); end
         if kind == 'T', d1_teacher_reset(teacher, Xref, k+1, cfg); end
     else
-        if kind == 'P', h = d1_hist_push(h, u, xNew, cfg); end
+        if kind == 'P', s = d1_student_push(s, x, u); end
         x = xNew; X(:,k) = x;
     end
 end

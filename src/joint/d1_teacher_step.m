@@ -1,11 +1,12 @@
-function [u, status, usable] = d1_teacher_step(teacher, x, uprev, Xref, k, F, cfg)
+function [u, status, usable, tsolve] = d1_teacher_step(teacher, x, uprev, Xref, k, F, cfg)
 %D1_TEACHER_STEP One step of the SAC-NMPC teacher with PRIVILEGED wind knowledge: the
 % current external force F (world frame; exact, simulation only) enters the prediction
 % model (acados parameter, held constant over the horizon) and the wind-consistent target
 % (d1_teacher_target). The teacher knows neither future gusts nor the true plant
 % parameters. The iterate is applied when the solver converged (status 0) or hit its
 % iteration cap (status 2) with a finite result (= "usable": applied, used as a label,
-% not a failure); otherwise u_prev is held and the solver is reset before the next step.
+% not a failure); otherwise (e.g. status 7 = time limit cfg.solveTimeout) u_prev is held
+% and the solver is reset before the next step. tsolve = wall time of the solve [s].
 N = cfg.N; M = cfg.M;
 [Yx, Yu] = d1_teacher_target(Xref, k, F, cfg);
 for s = 0:N-1
@@ -16,7 +17,9 @@ for s = 0:N
     teacher.set('p', F(:), s);
 end
 teacher.set('constr_x0', [repmat(x,M,1); uprev]);
+t0 = tic;
 teacher.solve();
+tsolve = toc(t0);
 status = teacher.get('status'); du0 = teacher.get('u', 0);
 usable = any(status == [0 2]) && all(isfinite(du0));
 if usable

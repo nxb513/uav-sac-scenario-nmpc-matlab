@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Hang watchdog for the D1 training step (diagnostics only; it never changes training).
 #
-# Usage: hang_watchdog.sh <run_dir> <stale_seconds>
+# Usage: hang_watchdog.sh <run_dir> <stale_seconds> (the workflow uses 3600 s: above the
+# worst case of one case when every solve hits the 2 s limit, 979 x 2 s = 33 min)
 # Every 60 s it takes the newest modification time of any file in <run_dir> (the pipeline
 # writes a checkpoint after every case once 120 s have passed, so in normal operation the
 # gap is at most a few minutes). If nothing was written for <stale_seconds>, the MATLAB

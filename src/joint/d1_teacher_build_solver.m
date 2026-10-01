@@ -108,6 +108,11 @@ ocp.solver_options.nlp_solver_type = cfg.solverType;
 if strcmp(cfg.solverType, 'SQP')
     ocp.solver_options.nlp_solver_max_iter = 50;
     ocp.solver_options.globalization = 'MERIT_BACKTRACKING';   % line search -> higher convergence rate
+    % time limit per solve (checked after every SQP iteration): a pathologically slow solve
+    % (degenerate QP data inside HPIPM, seen as multi-hour cases) ends with status 7 =
+    % ACADOS_TIMEOUT, which d1_teacher_step treats as unusable.
+    ocp.solver_options.timeout_max_time = cfg.solveTimeout;
+    ocp.solver_options.timeout_heuristic = 'ZERO';
 end
 ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM';
 ocp.solver_options.qp_solver_cond_N = 5;
