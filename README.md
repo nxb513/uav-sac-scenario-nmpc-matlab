@@ -5,6 +5,18 @@ is `docs/D1_method.pdf` (source `docs/D1_method.tex`); the document is kept in s
 the code, and the code is authoritative. Earlier pipelines are superseded and described
 only in `docs/legacy_pipeline.md`.
 
+## Status (2026-10-01)
+
+- This README and `docs/D1_method.pdf` describe the current code: training `fa8e9e6`,
+  CI `6aacc86`.
+- Training is paused. Occasionally a teacher solve becomes pathologically slow inside
+  HPIPM, and the case does not finish for hours. Diagnosis is in `docs/D1_method.pdf`,
+  section 7 ("Sự cố đã biết").
+- An approved redesign direction is not yet in the code. It replaces the MLP surrogate
+  with a linear student whose cost is comparable to LQR, trained by DAgger after SAC
+  (`docs/D1_student_design.pdf`, details pending approval). When the code changes, this
+  README and `docs/D1_method` will be rewritten to match it.
+
 ## Method in one page
 
 - **Deployed controller (P):** `u = sat( sat(u_LQR) + alpha * Du )`,

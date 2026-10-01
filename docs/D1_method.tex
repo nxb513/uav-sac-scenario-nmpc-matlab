@@ -75,6 +75,13 @@ dùng chung nằm trong \texttt{src/joint/d1\_*.m}, được cả pipeline huấ
 
 % ===================== 0 =====================
 \section{Tóm tắt phương pháp}
+\noindent\fbox{\parbox{0.97\textwidth}{\small\textbf{Trạng thái (2026-10-01).}
+(i) Tài liệu này mô tả đúng code hiện tại: huấn luyện \texttt{fa8e9e6}, CI \texttt{6aacc86}.
+(ii) Huấn luyện đang tạm dừng vì sự cố solver đã chẩn đoán (Mục 7, ``Sự cố đã biết'').
+(iii) Đã duyệt hướng thay surrogate MLP bằng \textbf{học trò tuyến tính có chi phí ngang LQR, học bằng DAgger sau SAC}
+(\texttt{docs/D1\_student\_design.pdf}; chi tiết đang chờ duyệt, \textbf{chưa có trong code}). Khi code đổi, các Mục 2, 8, 9,
+10, 11, 13 và 14 sẽ được viết lại cho khớp code.}}
+
 Mục tiêu: xây một \textbf{bộ điều khiển triển khai} cho UAV quadrotor \textbf{không cần giải tối ưu
 trực tuyến}, nhưng vẫn thừa hưởng chất lượng của một bộ \textbf{NMPC-scenario} mạnh và lấy \textbf{LQR làm
 nền} (phần dư chỉ bổ sung có kiểm soát; phân tích co rút là \emph{điều kiện đủ có điều kiện}, không phải
@@ -416,6 +423,23 @@ giá; vì dùng thông tin gió không đo được nên nó \textbf{không} ph�
 {\small\itshape Nguồn: scenario-MPC — Calafiore \& Campi (2006); acados — Verschueren et al. (2022);
 CasADi — Andersson et al. (2019); offset-free MPC — Muske \& Badgwell (2002), Pannocchia \& Rawlings (2003);
 flatness quadrotor — Mellinger \& Kumar (2011); teacher có thông tin đặc quyền — Chen et al. (2020).}
+
+\noindent\textbf{Sự cố đã biết: lời giải chậm bệnh lý (phát hiện 2026-09-30, chẩn đoán 2026-10-01).}
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item \emph{Triệu chứng:} một quỹ đạo bình thường mất 20--90 s (2804 quỹ đạo đã xong: trung vị 22 s, p99 99 s, lớn nhất
+140 s). Thỉnh thoảng một quỹ đạo in ra loạt lỗi QP (\texttt{MINSTEP}, có lần \texttt{NAN\_DETECTED}) rồi không kết thúc trong
+nhiều giờ, cho tới khi job bị dừng ở 340 phút. Đây cũng là nguyên nhân các lần ``kẹt ở iter 1'' trước đó.
+\item \emph{Vị trí:} watchdog (\texttt{tools/ci/hang\_watchdog.sh}) chụp stack bằng gdb: luồng chính dùng 100\% CPU bên trong
+\texttt{ocp\_nlp\_sqp} $\to$ \texttt{d\_ocp\_qp\_ipm\_solve} (HPIPM) $\to$ \texttt{d\_ocp\_qp\_fact\_solve\_kkt\_step} $\to$ các
+kernel BLASFEO.
+\item \emph{Bản chất:} vòng lặp IPM và SQP đều bị chặn (100 và 50 vòng), nên đây là các lần giải \emph{chậm bệnh lý} (dữ liệu
+QP suy biến), không phải vòng lặp vô hạn; nguyên nhân số học chính xác chưa được chứng minh. Khi resume, 6/8 chain treo lại
+đúng quỹ đạo cũ (tất định); một chain vượt qua được (sai khác số học nhỏ giữa các máy).
+\item \emph{Đã làm:} ghim acados (commit \texttt{3edf443}); resume bắt buộc có checkpoint; watchdog dừng bước train sau 30
+phút không có checkpoint mới để checkpoint được tải lên. \emph{Đề xuất, chưa có trong code:} giới hạn thời gian mỗi lần giải
+(\texttt{timeout\_max\_time} $=2$ s; hết giờ $=$ lời giải không dùng được) và ghi thời gian giải vào log
+(\texttt{docs/D1\_student\_design.pdf}, Mục 7).
+\end{itemize}
 
 \noindent{\small\itshape Giới hạn đã biết: trung bình chi phí trên $M=5$ kịch bản KHÔNG tự tạo bảo đảm
 robust trên toàn miền bất định; đây là hedge kinh nghiệm, không phải chứng nhận min--max.}
