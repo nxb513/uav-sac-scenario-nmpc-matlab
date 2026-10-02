@@ -68,10 +68,8 @@ end
 function heartbeat(f, c, gid, k, x, xr, F)
 fid = fopen(f, 'w');
 if fid < 0, return; end
-fprintf(fid, 'case %d %s k=%d |e_pos|=%.4g |eta|=%.4g |v|=%.4g |omega|=%.4g |F|=%.4g
-', c, gid, k, ...
+fprintf(fid, 'case %d %s k=%d |e_pos|=%.4g |eta|=%.4g |v|=%.4g |omega|=%.4g |F|=%.4g\n', c, gid, k, ...
     norm(x(1:3)-xr(1:3)), norm(x(4:6)), norm(x(7:9)), norm(x(10:12)), norm(F));
-fprintf(fid, 'x = [%s]
-', strtrim(sprintf('%.17g ', x)));
+fprintf(fid, 'x = [%s]\n', strtrim(sprintf('%.17g ', x)));
 fclose(fid);
 end
