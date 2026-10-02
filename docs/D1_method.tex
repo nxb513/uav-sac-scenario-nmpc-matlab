@@ -411,10 +411,18 @@ flatness quadrotor — Mellinger \& Kumar (2011); teacher có thông tin đặc 
 \item \emph{Vị trí:} watchdog (\texttt{tools/ci/hang\_watchdog.sh}) chụp stack bằng gdb: luồng chính dùng 100\% CPU bên trong
 \emph{một} lần giải QP: \texttt{ocp\_nlp\_sqp} $\to$ \texttt{d\_ocp\_qp\_ipm\_solve} (HPIPM) $\to$
 \texttt{d\_ocp\_qp\_fact\_solve\_kkt\_step} $\to$ kernel BLASFEO.
-\item \emph{Bản chất (chưa kết luận):} vòng lặp IPM và SQP đều bị chặn (100 và 50 vòng), nên đây là phép tính \emph{chậm bệnh
-lý} chứ không phải lặp vô hạn; giả thuyết đang kiểm tra là số học dưới chuẩn (subnormal) trong dữ liệu QP suy biến.
-Chẩn đoán: \texttt{experiments/d1\_diag\_replay.m} (workflow \texttt{d1-diag-replay.yml}) phát lại đúng quỹ đạo bị treo, ghi
-mọi lần giải chậm, và một biến thể bật flush-to-zero/denormals-are-zero (\texttt{tools/ci/d1\_set\_ftz.c}).
+\item \emph{Đã xác định (2026-10-02):} \texttt{experiments/d1\_diag\_replay.m} (workflow \texttt{d1-diag-replay.yml}) phát lại
+đúng iteration bị treo của seed 102 và 103: cả hai treo lại \emph{đúng bước cũ}, và lần giải đó không trả về sau 73 phút,
+trong khi lần giải chậm nhất có trả về của cùng quỹ đạo mất 0.53 s (status 4, 15 vòng SQP). Biến thể bật
+flush-to-zero/denormals-are-zero (\texttt{tools/ci/d1\_set\_ftz.c}, MXCSR kiểm tra $=$\texttt{0x9FE0}) treo y hệt
+$\Rightarrow$ giả thuyết số dưới chuẩn bị \textbf{bác bỏ}. Đọc mã nguồn acados/HPIPM đã ghim: mọi vòng lặp đều bị chặn
+(SQP 50, IPM 100, tinh chỉnh lặp, line search dừng ở $\alpha_{\min}$), nên một lần giải đúng không thể quá vài giây; treo
+nhiều giờ là \textbf{lỗi không kết thúc} (nghi dữ liệu/kích thước bị hỏng), không phải hội tụ chậm. Lỗi cũng xuất hiện ở pha
+DAgger khi teacher được hỏi tại trạng thái học trò bay lệch xa.
+\item \emph{Đang chẩn đoán tiếp:} build acados có \texttt{-g} (cùng mã máy) và biến thể bật kiểm tra kích thước BLASFEO
+(\texttt{DIM\_CHECK}); \texttt{tools/ci/diag\_watchdog.sh} phát hiện lần giải đứng quá 120 s (heartbeat ghi trước mỗi lần
+giải) và chụp gdb 3 lần cách 30 s (\texttt{tools/ci/diag\_gdb.py}: bộ đếm vòng IPM, bước, kích thước QP, lời gọi BLASFEO)
+để biết vòng IPM còn chạy hay một phép tính đại số tuyến tính không bao giờ trả về.
 \item \emph{Nguyên tắc:} ngân sách tính toán của teacher chỉ định nghĩa bằng \textbf{số vòng lặp} (tất định, không phụ thuộc
 máy); \textbf{không} dùng giới hạn thời gian (một bản thử giới hạn 2 s mỗi lần giải đã bị gỡ: phụ thuộc phần cứng, không có
 căn cứ, và không chặn được lần giải QP đơn lẻ). Cách sửa sẽ được chọn theo kết quả chẩn đoán và ghi vào đây.

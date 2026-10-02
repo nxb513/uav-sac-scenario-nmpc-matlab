@@ -9,11 +9,16 @@ function d1_diag_replay()
 %   HB lines   : heartbeat every 100 steps
 % D1_FTZ=1 first sets flush-to-zero / denormals-are-zero in the MATLAB thread (MEX
 % tools/ci/d1_set_ftz) to test whether subnormal arithmetic causes the slowness.
+% D1_HEARTBEAT=<file>: before every teacher solve the file is rewritten with the case and
+% step about to be solved (read by tools/ci/diag_watchdog.sh to locate a stall).
+% D1_DIAG_NCASES=<n>: replay only the pending case and the n-1 following ones (default all).
 cfg = d1_config(); rng(cfg.seed, 'twister');
 scen = d1_sample_scenarios(cfg); cases = d1_train_cases(cfg);
 S = load(fullfile(cfg.runDir, sprintf('checkpoint_seed%d.mat', cfg.seed))); st = S.st;
 assert(isfield(st, 'pend') && ~isempty(st.pend), 'checkpoint has no pending iteration');
 ftz = strcmp(d1_getenv_str('D1_FTZ', '0'), '1');
+hbFile = d1_getenv_str('D1_HEARTBEAT', '');
+cLast = min(cfg.casesPerEval, st.pend.c + d1_getenv_num('D1_DIAG_NCASES', cfg.casesPerEval) - 1);
 if ftz, before = d1_set_ftz(1); else, before = d1_set_ftz(-1); end
 fprintf('REPLAY seed=%d iter=%d pending case %d of %d | FTZ=%d MXCSR before=%s now=%s\n', ...
     cfg.seed, st.iter, st.pend.c, cfg.casesPerEval, ftz, dec2hex(before), dec2hex(d1_set_ftz(-1)));
@@ -21,7 +26,7 @@ teacher = d1_teacher_build_solver(cfg, scen);
 [Q, R] = d1_action_to_QR(st.pend.a, cfg); d1_set_teacher_weights(teacher, Q, R, cfg);
 rng(S.rngState);
 Ts = cfg.Ts; theta = cfg.plant.nominal; uh = cfg.uh;
-for c = st.pend.c:cfg.casesPerEval
+for c = st.pend.c:cLast
     kase = cases(st.pend.idx(c)); Xref = kase.Xref; T = d1_case_len(Xref, cfg);
     if cfg.windOn, ds = d1_sample_wind(cfg, T); else, ds = []; end   % same draws as paired_rollout
     xN = Xref(:,1); uprev = uh; d1_teacher_reset(teacher, Xref, 1, cfg);
@@ -30,6 +35,7 @@ for c = st.pend.c:cfg.casesPerEval
     for k = 1:T
         t = (k-1)*Ts;
         F = d1_wind_now(ds, t, xN, uprev, theta);
+        if ~isempty(hbFile), heartbeat(hbFile, c, kase.groupId, k, xN, Xref(:,k), F); end
         [uN, status, usable, tsol(k)] = d1_teacher_step(teacher, xN, uprev, Xref, k, F, cfg);
         nUnu = nUnu + ~usable;
         if tsol(k) > 0.5
@@ -57,4 +63,15 @@ for c = st.pend.c:cfg.casesPerEval
         c, kase.groupId, toc(tCase), max(tsol), prctile(tsol, 99), nSlow, nUnu, nDiv);
 end
 fprintf('REPLAY_DONE\n');
+end
+
+function heartbeat(f, c, gid, k, x, xr, F)
+fid = fopen(f, 'w');
+if fid < 0, return; end
+fprintf(fid, 'case %d %s k=%d |e_pos|=%.4g |eta|=%.4g |v|=%.4g |omega|=%.4g |F|=%.4g
+', c, gid, k, ...
+    norm(x(1:3)-xr(1:3)), norm(x(4:6)), norm(x(7:9)), norm(x(10:12)), norm(F));
+fprintf(fid, 'x = [%s]
+', strtrim(sprintf('%.17g ', x)));
+fclose(fid);
 end

@@ -48,7 +48,7 @@ the linear student + DAgger; it is now implemented and merged into `docs/D1_meth
 | `tools/wind/` | Download and convert measured wind (validation only, inside CI jobs) |
 | `tools/eval/summarize_final_eval.py` | Markdown summary of the final-evaluation CSVs |
 | `tools/ci/hang_watchdog.sh` | Diagnostic watchdog of the training step |
-| `experiments/d1_diag_replay.m`, `.github/workflows/d1-diag-replay.yml`, `tools/ci/d1_set_ftz.c` | Diagnostic replay of a hung case (not part of the method) |
+| `experiments/d1_diag_replay.m`, `.github/workflows/d1-diag-replay.yml`, `tools/ci/d1_set_ftz.c`, `tools/ci/diag_watchdog.sh`, `tools/ci/diag_gdb.py` | Diagnostic replay of a hung case with stall snapshots (not part of the method) |
 
 All other scripts in `experiments/` belong to earlier stages and are not part of the current
 pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `select_d1_teacher`,

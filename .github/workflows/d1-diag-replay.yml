@@ -1,9 +1,15 @@
 name: D1 diagnostic replay (solver hang)
 
 # DIAGNOSTIC only, not part of the method: replays the pending SAC iteration of a chain's
-# checkpoint exactly as training flies the teacher (experiments/d1_diag_replay.m) and prints
-# every slow solve. variant "ftz" first sets flush-to-zero / denormals-are-zero in the MATLAB
-# thread (tools/ci/d1_set_ftz.c) to test whether subnormal arithmetic causes the slowness.
+# checkpoint exactly as training flies the teacher (experiments/d1_diag_replay.m), prints
+# every slow solve and writes a heartbeat before every solve. If a solve stalls (heartbeat
+# older than 120 s; a normal solve takes < 1 s), tools/ci/diag_watchdog.sh takes three gdb
+# snapshots of the stalled thread (tools/ci/diag_gdb.py), 30 s apart, and stops MATLAB.
+# Variants:
+#   off : release build of the pinned acados (as in training)
+#   ftz : as off, with flush-to-zero / denormals-are-zero set in the MATLAB thread
+#   dbg : pinned acados built with -g (same code generation, readable gdb snapshots)
+#   chk : as dbg, plus BLASFEO run-time dimension checks (DIM_CHECK)
 
 on:
   workflow_dispatch:
@@ -17,9 +23,14 @@ on:
         required: true
         type: string
       variants:
-        description: 'JSON list of variants ("off", "ftz")'
+        description: 'JSON list of variants ("off", "ftz", "dbg", "chk")'
         required: true
-        default: '["off","ftz"]'
+        default: '["dbg","chk"]'
+        type: string
+      ncases:
+        description: "Cases to replay from the pending one (the pending case and the next ones)"
+        required: false
+        default: "20"
         type: string
 
 jobs:
@@ -40,6 +51,7 @@ jobs:
       D1_CASES_PER_EVAL: "20"
       D1_WIND: "1"
       D1_FTZ: ${{ matrix.variant == 'ftz' && '1' || '0' }}
+      D1_DIAG_NCASES: ${{ inputs.ncases }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.chain[0] }}
       ACADOS_COMMIT: 3edf4435e7d88d8a4d1c5c3a4f613f032aae658f
     steps:
@@ -53,16 +65,25 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.run }}
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake build-essential git unzip wget
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential git unzip wget gdb
       - name: Clone and build acados (pinned)
+        env:
+          VARIANT: ${{ matrix.variant }}
         run: |
           set -euxo pipefail
           git clone https://github.com/acados/acados.git "$GITHUB_WORKSPACE/acados"
           cd "$GITHUB_WORKSPACE/acados"
           git checkout "$ACADOS_COMMIT"
           git submodule update --recursive --init
+          cflags=""
+          if [ "$VARIANT" = dbg ] || [ "$VARIANT" = chk ]; then cflags="-g"; fi
+          if [ "$VARIANT" = chk ]; then
+            sed -i 's/^set(RUNTIME_CHECKS OFF)/set(RUNTIME_CHECKS ON)/' external/blasfeo/CMakeLists.txt
+            grep -n '^set(RUNTIME_CHECKS' external/blasfeo/CMakeLists.txt
+          fi
           mkdir -p build && cd build
-          cmake -DACADOS_WITH_QPOASES=ON -DACADOS_INSTALL_DIR="$GITHUB_WORKSPACE/acados" ..
+          cmake -DACADOS_WITH_QPOASES=ON -DACADOS_INSTALL_DIR="$GITHUB_WORKSPACE/acados" \
+                -DCMAKE_C_FLAGS="$cflags" ..
           make install -j4
           echo "ACADOS_INSTALL_DIR=$GITHUB_WORKSPACE/acados" >> "$GITHUB_ENV"
           echo "ACADOS_SOURCE_DIR=$GITHUB_WORKSPACE/acados" >> "$GITHUB_ENV"
@@ -85,6 +106,13 @@ jobs:
             Control_System_Toolbox
             Statistics_and_Machine_Learning_Toolbox
           cache: true
+      - name: Start stall watchdog (diagnostics only)
+        run: |
+          mkdir -p "$RUNNER_TEMP/diag"
+          echo "D1_HEARTBEAT=$RUNNER_TEMP/diag/heartbeat.txt" >> "$GITHUB_ENV"
+          nohup bash tools/ci/diag_watchdog.sh "$RUNNER_TEMP/diag/heartbeat.txt" 120 \
+            "$RUNNER_TEMP/diag" 3 30 > "$RUNNER_TEMP/diag/watchdog.log" 2>&1 &
+          echo "watchdog started"
       - name: Replay (${{ matrix.chain[0] }}, ${{ matrix.variant }})
         timeout-minutes: 75
         uses: matlab-actions/run-command@v3
@@ -97,3 +125,20 @@ jobs:
             mex('-outdir', 'tools/ci', 'tools/ci/d1_set_ftz.c'); addpath('tools/ci');
             addpath(genpath('src')); addpath('configs'); addpath('experiments');
             d1_diag_replay;
+      - name: Show watchdog log and snapshots
+        if: always()
+        run: |
+          cat "$RUNNER_TEMP/diag/watchdog.log" || true
+          for f in "$RUNNER_TEMP"/diag/gdb_snapshot_*.txt; do
+            [ -f "$f" ] || continue
+            echo "================ $f"
+            grep -v '^\[New LWP' "$f" | head -400
+          done
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-diag-seed${{ matrix.chain[0] }}-${{ matrix.variant }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/diag/
+          if-no-files-found: warn
+          retention-days: 30
