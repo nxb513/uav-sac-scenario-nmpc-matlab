@@ -381,7 +381,7 @@ từng kịch bản). Kiểu NLP chọn qua \texttt{D1\_SOLVER}: \texttt{SQP} (m
 và đánh giá; $\le50$ vòng, tìm kiếm đường merit) hoặc \texttt{SQP\_RTI} (1 vòng, tuỳ chọn). QP: HPIPM partial
 condensing ($N_{\mathrm{cond}}=5$, $\le100$ vòng), Hessian Gauss--Newton, Levenberg--Marquardt $10^{-3}$.
 $N=20,\ N_c=5,\ M=5$ cố định. Mọi job (huấn luyện, resume, đánh giá) build acados tại cùng một commit
-ghim sẵn (\texttt{3edf4435e7}), nên solver không đổi phiên bản giữa chừng một chain.
+ghim sẵn (bản phát hành \textbf{acados v0.6.0}, commit \texttt{5033648}), nên solver không đổi phiên bản giữa chừng một chain.
 \item Mỗi bước (\texttt{d1\_teacher\_step}): lực $F_k$ đặt vào tham số của mọi stage $0..N$; tham chiếu nhất
 quán với gió $(\bar x_{k..k+N},\bar u_{k..k+N-1})$ cho mọi kịch bản; trạng thái đầu
 $[x_k;\dots;x_k;\,u_{\mathrm{prev}}]$; giải một lần. Lời giải \emph{dùng được} khi solver trả status $0$
@@ -403,31 +403,30 @@ giá; vì dùng thông tin gió không đo được nên nó \textbf{không} ph�
 CasADi — Andersson et al. (2019); offset-free MPC — Muske \& Badgwell (2002), Pannocchia \& Rawlings (2003);
 flatness quadrotor — Mellinger \& Kumar (2011); teacher có thông tin đặc quyền — Chen et al. (2020).}
 
-\noindent\textbf{Sự cố đã biết: lời giải chậm bệnh lý (phát hiện 2026-09-30, đang chẩn đoán).}
+\noindent\textbf{Sự cố đã giải quyết: solver treo (phát hiện 2026-09-30, xác định nguyên nhân 2026-10-02).}
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
-\item \emph{Triệu chứng:} một quỹ đạo bình thường mất vài chục giây (2988 quỹ đạo của lần chạy \texttt{2bad369}: trung vị
-13 s, p99 86 s, lớn nhất 101 s; lời giải lâu nhất $\approx0.14$ s). Thỉnh thoảng một quỹ đạo in ra loạt lỗi QP
-(\texttt{MINSTEP}) rồi không kết thúc trong nhiều giờ. Khi resume, phần lớn chain treo lại đúng quỹ đạo cũ (tất định).
-\item \emph{Vị trí:} watchdog (\texttt{tools/ci/hang\_watchdog.sh}) chụp stack bằng gdb: luồng chính dùng 100\% CPU bên trong
-\emph{một} lần giải QP: \texttt{ocp\_nlp\_sqp} $\to$ \texttt{d\_ocp\_qp\_ipm\_solve} (HPIPM) $\to$
-\texttt{d\_ocp\_qp\_fact\_solve\_kkt\_step} $\to$ kernel BLASFEO.
-\item \emph{Đã xác định (2026-10-02):} \texttt{experiments/d1\_diag\_replay.m} (workflow \texttt{d1-diag-replay.yml}) phát lại
-đúng iteration bị treo của seed 102 và 103: cả hai treo lại \emph{đúng bước cũ}, và lần giải đó không trả về sau 73 phút,
-trong khi lần giải chậm nhất có trả về của cùng quỹ đạo mất 0.53 s (status 4, 15 vòng SQP). Biến thể bật
-flush-to-zero/denormals-are-zero (\texttt{tools/ci/d1\_set\_ftz.c}, MXCSR kiểm tra $=$\texttt{0x9FE0}) treo y hệt
-$\Rightarrow$ giả thuyết số dưới chuẩn bị \textbf{bác bỏ}. Đọc mã nguồn acados/HPIPM đã ghim: mọi vòng lặp đều bị chặn
-(SQP 50, IPM 100, tinh chỉnh lặp, line search dừng ở $\alpha_{\min}$), nên một lần giải đúng không thể quá vài giây; treo
-nhiều giờ là \textbf{lỗi không kết thúc} (nghi dữ liệu/kích thước bị hỏng), không phải hội tụ chậm. Lỗi cũng xuất hiện ở pha
-DAgger khi teacher được hỏi tại trạng thái học trò bay lệch xa.
-\item \emph{Đang chẩn đoán tiếp:} build acados có \texttt{-g} (cùng mã máy) và biến thể bật kiểm tra kích thước BLASFEO
-(\texttt{DIM\_CHECK}); \texttt{tools/ci/diag\_watchdog.sh} phát hiện lần giải đứng quá 120 s (heartbeat ghi trước mỗi lần
-giải) và chụp gdb 3 lần cách 30 s (\texttt{tools/ci/diag\_gdb.py}: bộ đếm vòng IPM, bước, kích thước QP, lời gọi BLASFEO)
-để biết vòng IPM còn chạy hay một phép tính đại số tuyến tính không bao giờ trả về.
-\item \emph{Nguyên tắc:} ngân sách tính toán của teacher chỉ định nghĩa bằng \textbf{số vòng lặp} (tất định, không phụ thuộc
-máy); \textbf{không} dùng giới hạn thời gian (một bản thử giới hạn 2 s mỗi lần giải đã bị gỡ: phụ thuộc phần cứng, không có
-căn cứ, và không chặn được lần giải QP đơn lẻ). Cách sửa sẽ được chọn theo kết quả chẩn đoán và ghi vào đây.
-\item \emph{Công cụ CI (không thuộc phương pháp):} ghim acados (commit \texttt{3edf443}); resume bắt buộc có checkpoint; watchdog
-dừng bước train sau 60 phút không có file mới (quỹ đạo dài nhất đã xong là 101 s) để checkpoint được tải lên.
+\item \emph{Triệu chứng:} thỉnh thoảng một quỹ đạo in loạt lỗi QP rồi không kết thúc trong nhiều giờ (100\% CPU); resume
+treo lại đúng bước cũ (tất định). Quỹ đạo bình thường: trung vị 13 s, lớn nhất 101 s; lời giải bình thường $\le0.5$ s.
+\item \emph{Nguyên nhân:} commit acados ghim trước đây (\texttt{3edf443}, bản master chưa phát hành, sau v0.6.0) kéo theo
+HPIPM \texttt{bad1123}, trong đó bước hiệu chỉnh quán tính (thêm vào HPIPM ngày 2026-07-31) tăng regularization
+\texttt{preg} ($\times8$ hoặc $\times100$) mỗi khi phân rã Cholesky của Riccati suy biến, \emph{không giới hạn số lần}. Khi dữ
+liệu KKT không hữu hạn, \texttt{preg} lên $\infty$, phân rã suy biến mãi $\Rightarrow$ vòng lặp vô hạn. Dữ liệu như vậy xuất
+hiện khi teacher được hỏi tại trạng thái plant đã nổ số (ví dụ $\|\omega\|=2.4\cdot10^4$ và $8\cdot10^{10}$ rad/s ở hai lần treo
+được phát lại; luật bay chung vẫn cho bay tiếp tới khi trạng thái không hữu hạn).
+\item \emph{Bằng chứng:} \texttt{experiments/d1\_diag\_replay.m} (workflow \texttt{d1-diag-replay.yml}) phát lại đúng iteration
+bị treo; heartbeat trước mỗi lần giải và gdb trên bản build \texttt{-g} (\texttt{tools/ci/diag\_watchdog.sh},
+\texttt{diag\_gdb.py}): ba lần chụp cách 30 s đều ở vòng IPM đầu tiên ($kk=0$), \texttt{preg}$=\infty$ trong
+\texttt{d\_ocp\_qp\_fact\_solve\_kkt\_step}. Biến thể flush-to-zero (\texttt{tools/ci/d1\_set\_ftz.c}) và kiểm tra kích thước
+BLASFEO (\texttt{DIM\_CHECK}) treo y hệt, loại trừ số dưới chuẩn và hỏng bộ nhớ.
+\item \emph{Cách sửa:} dùng nguyên bản phát hành chính thức \textbf{acados v0.6.0} (commit \texttt{5033648}, HPIPM
+\texttt{e3a56c1} ngày 2026-04-30, chưa có vòng lặp đó), không vá, không thêm quy tắc. Phát lại hai iteration bị treo với
+v0.6.0: cả hai quỹ đạo chạy hết (50 s và 84 s), lời giải lâu nhất 0.49 s; các lần giải không thành công trả về mã lỗi của
+solver và được xử lý theo quy tắc ``không dùng được'' sẵn có. Luật bay chung giữ nguyên.
+\item \emph{Nguyên tắc:} ngân sách tính toán của teacher chỉ định nghĩa bằng \textbf{số vòng lặp}; \textbf{không} dùng giới hạn
+thời gian (bản thử giới hạn 2 s đã bị gỡ).
+\item \emph{Hệ quả:} mọi chain huấn luyện trên \texttt{3edf443} bị thay thế; cả 8 chain chạy lại từ đầu trên v0.6.0.
+\item \emph{Công cụ CI (không thuộc phương pháp):} ghim acados v0.6.0; resume bắt buộc có checkpoint; watchdog dừng bước
+train sau 60 phút không có file mới để checkpoint được tải lên.
 \end{itemize}
 
 \noindent{\small\itshape Giới hạn đã biết: trung bình chi phí trên $M=5$ kịch bản KHÔNG tự tạo bảo đảm
@@ -820,7 +819,7 @@ Chân trời dự báo / điều khiển & $N$ / $N_c$ & $20$ / $5$ (move-blocki
 Số kịch bản robust & $M$ & $5$\\
 Cửa sổ co rút & $H$ & $20$ bước ($1.0$ s)\\
 Trọng số cuối kỳ & $Q_f$ & $Q_0$ (Bryson), cố định\\
-Solver NLP & -- & \texttt{SQP}: $\le50$ vòng SQP, mỗi QP $\le100$ vòng HPIPM (ngân sách tính bằng số vòng); acados ghim \texttt{3edf443}\\
+Solver NLP & -- & \texttt{SQP}: $\le50$ vòng SQP, mỗi QP $\le100$ vòng HPIPM (ngân sách tính bằng số vòng); acados v0.6.0 (\texttt{5033648})\\
 Thông tin gió của teacher & $F_k$ & lực gió hiện tại (đặc quyền), giữ không đổi trên tầm dự báo\\
 Tham chiếu của teacher & $(\bar x,\bar u)$ & flatness danh nghĩa với lực đẩy $m(a+ge_3)+D_vv-F_k$\\
 Áp nghiệm teacher & -- & status $0$ hoặc $2$ và hữu hạn; nếu không: giữ lệnh cũ, đặt lại solver\\

@@ -33,9 +33,9 @@ on:
         default: "20"
         type: string
       acados_commit:
-        description: "acados commit to build (default: the training pin)"
+        description: "acados commit to build (default: the training pin, release v0.6.0)"
         required: false
-        default: "3edf4435e7d88d8a4d1c5c3a4f613f032aae658f"
+        default: "503364817c872d474ab5bed219c26760ac267769"
         type: string
 
 jobs:

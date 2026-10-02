@@ -87,8 +87,11 @@ pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `selec
     (`train`, `ood`), `chain_ctrls` (`Teacher,P`) and `base_ctrls` (`LQR,LQI,MPC`).
   - **Outputs:** CSVs, representative trajectories and a Markdown summary.
 
-Both D1 workflows build acados at the pinned commit `3edf4435e7d88d8a4d1c5c3a4f613f032aae658f`
-(CasADi 3.6.7), so every job of every chain uses the same solver. A resume fails if the
+All D1 workflows build the official release acados v0.6.0 (commit
+`503364817c872d474ab5bed219c26760ac267769`, unmodified; CasADi 3.6.7), so every job of every
+chain uses the same solver. The previously pinned unreleased master commit carried an HPIPM
+regularization loop without an iteration limit that never ended on non-finite QP data (the
+multi-hour "hangs"); see the known-issue note in `docs/D1_method.pdf`. A resume fails if the
 checkpoint cannot be downloaded; it never silently restarts a chain.
 
 A diagnostic watchdog (`tools/ci/hang_watchdog.sh`) watches the training step. If no file is
