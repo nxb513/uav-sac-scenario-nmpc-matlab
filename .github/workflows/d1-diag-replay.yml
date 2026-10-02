@@ -32,6 +32,11 @@ on:
         required: false
         default: "20"
         type: string
+      acados_commit:
+        description: "acados commit to build (default: the training pin)"
+        required: false
+        default: "3edf4435e7d88d8a4d1c5c3a4f613f032aae658f"
+        type: string
 
 jobs:
   replay:
@@ -53,7 +58,7 @@ jobs:
       D1_FTZ: ${{ matrix.variant == 'ftz' && '1' || '0' }}
       D1_DIAG_NCASES: ${{ inputs.ncases }}
       D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.chain[0] }}
-      ACADOS_COMMIT: 3edf4435e7d88d8a4d1c5c3a4f613f032aae658f
+      ACADOS_COMMIT: ${{ inputs.acados_commit }}
     steps:
       - uses: actions/checkout@v6
       - name: Download checkpoint
