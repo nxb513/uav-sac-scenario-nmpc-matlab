@@ -102,17 +102,13 @@ ocp.constraints.ubx = [P.Tmax; 0.5; 0.5; 0.25];
 ocp.constraints.x0 = zeros(nxa, 1);
 
 ocp.solver_options.integrator_type = 'DISCRETE';
-% Solver selectable via cfg.solverType (env D1_SOLVER): 'SQP_RTI' (1 iter, ~10x
-% faster, more surrogate samples) vs 'SQP' (up to 30 iters, tighter labels).
+% Solver selectable via cfg.solverType (env D1_SOLVER): 'SQP' (used by every run; at most
+% 50 SQP iterations, each QP at most 100 HPIPM iterations = the teacher's computational
+% budget, defined in iterations, not time) or 'SQP_RTI' (1 iteration).
 ocp.solver_options.nlp_solver_type = cfg.solverType;
 if strcmp(cfg.solverType, 'SQP')
     ocp.solver_options.nlp_solver_max_iter = 50;
     ocp.solver_options.globalization = 'MERIT_BACKTRACKING';   % line search -> higher convergence rate
-    % time limit per solve (checked after every SQP iteration): a pathologically slow solve
-    % (degenerate QP data inside HPIPM, seen as multi-hour cases) ends with status 7 =
-    % ACADOS_TIMEOUT, which d1_teacher_step treats as unusable.
-    ocp.solver_options.timeout_max_time = cfg.solveTimeout;
-    ocp.solver_options.timeout_heuristic = 'ZERO';
 end
 ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM';
 ocp.solver_options.qp_solver_cond_N = 5;

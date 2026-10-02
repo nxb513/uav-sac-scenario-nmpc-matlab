@@ -14,7 +14,8 @@ the linear student + DAgger; it is now implemented and merged into `docs/D1_meth
   nominal hover model. No optimization is solved online; the cost per step is of the same
   order as the LQR (108 multiply-adds for `W*phi`, 48 for the LQR).
 - **Teacher (training only, and oracle in evaluation):** SAC-tuned scenario NMPC
-  (acados, M = 5 model scenarios, N = 20, Nc = 5, SQP, 2 s limit per solve). It is told the
+  (acados, M = 5 model scenarios, N = 20, Nc = 5, SQP with at most 50 SQP and 100 QP
+  iterations per solve). It is told the
   exact current wind force (privileged information, simulation only), which enters its
   prediction model and a wind-consistent flat reference. It is not deployable.
 - **Linear student:** `Du = W*phi`, `W` is 4 x 27, no bias. `phi` holds the state error
@@ -43,10 +44,11 @@ the linear student + DAgger; it is now implemented and merged into `docs/D1_meth
 | `experiments/d1_final_eval.m` | Final evaluation: LQR, LQI, linear MPC (N = 5), Teacher (oracle), P under measured wind |
 | `src/joint/d1_*.m` | The single shared definitions used by both scripts (see `src/joint/README.md`) |
 | `src/joint/d1_dagger_run.m` | DAgger loop, selection, confidences, student file |
-| `src/joint/d1_teacher_build_solver.m` | acados scenario-NMPC teacher with the wind-force parameter and solve time limit |
+| `src/joint/d1_teacher_build_solver.m` | acados scenario-NMPC teacher with the wind-force parameter |
 | `tools/wind/` | Download and convert measured wind (validation only, inside CI jobs) |
 | `tools/eval/summarize_final_eval.py` | Markdown summary of the final-evaluation CSVs |
 | `tools/ci/hang_watchdog.sh` | Diagnostic watchdog of the training step |
+| `experiments/d1_diag_replay.m`, `.github/workflows/d1-diag-replay.yml`, `tools/ci/d1_set_ftz.c` | Diagnostic replay of a hung case (not part of the method) |
 
 All other scripts in `experiments/` belong to earlier stages and are not part of the current
 pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `select_d1_teacher`,
@@ -59,9 +61,8 @@ pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `selec
   on the reference, resets the controller's internal state and is counted.
 - The per-step position error is capped at 5 m; a diverged step counts as 5 m.
 - A teacher solve is *usable* when its status is 0 or 2 and the result is finite. Usable
-  solves are applied (and are DAgger labels inside the flight envelope). Otherwise, for
-  example when the 2 s limit is hit (status 7), the last input is held and the solver is
-  reset. The SAC reward's failure rate counts the unusable steps.
+  solves are applied (and are DAgger labels inside the flight envelope). Otherwise the last
+  input is held and the solver is reset. The SAC reward's failure rate counts the unusable steps.
 
 ## GitHub workflows
 

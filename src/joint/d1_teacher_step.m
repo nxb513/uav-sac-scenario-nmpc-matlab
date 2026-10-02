@@ -5,8 +5,8 @@ function [u, status, usable, tsolve] = d1_teacher_step(teacher, x, uprev, Xref, 
 % (d1_teacher_target). The teacher knows neither future gusts nor the true plant
 % parameters. The iterate is applied when the solver converged (status 0) or hit its
 % iteration cap (status 2) with a finite result (= "usable": applied, used as a label,
-% not a failure); otherwise (e.g. status 7 = time limit cfg.solveTimeout) u_prev is held
-% and the solver is reset before the next step. tsolve = wall time of the solve [s].
+% not a failure); otherwise u_prev is held and the solver is reset before the next step.
+% tsolve = wall time of the solve [s] (logged only; it never changes the result).
 N = cfg.N; M = cfg.M;
 [Yx, Yu] = d1_teacher_target(Xref, k, F, cfg);
 for s = 0:N-1

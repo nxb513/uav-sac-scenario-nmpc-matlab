@@ -403,24 +403,23 @@ giá; vì dùng thông tin gió không đo được nên nó \textbf{không} ph�
 CasADi — Andersson et al. (2019); offset-free MPC — Muske \& Badgwell (2002), Pannocchia \& Rawlings (2003);
 flatness quadrotor — Mellinger \& Kumar (2011); teacher có thông tin đặc quyền — Chen et al. (2020).}
 
-\noindent\textbf{Sự cố đã biết: lời giải chậm bệnh lý (phát hiện 2026-09-30, chẩn đoán 2026-10-01).}
+\noindent\textbf{Sự cố đã biết: lời giải chậm bệnh lý (phát hiện 2026-09-30, đang chẩn đoán).}
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
-\item \emph{Triệu chứng:} một quỹ đạo bình thường mất 20--90 s (2804 quỹ đạo đã xong: trung vị 22 s, p99 99 s, lớn nhất
-140 s). Thỉnh thoảng một quỹ đạo in ra loạt lỗi QP (\texttt{MINSTEP}, có lần \texttt{NAN\_DETECTED}) rồi không kết thúc trong
-nhiều giờ, cho tới khi job bị dừng ở 340 phút. Đây cũng là nguyên nhân các lần ``kẹt ở iter 1'' trước đó.
+\item \emph{Triệu chứng:} một quỹ đạo bình thường mất vài chục giây (2988 quỹ đạo của lần chạy \texttt{2bad369}: trung vị
+13 s, p99 86 s, lớn nhất 101 s; lời giải lâu nhất $\approx0.14$ s). Thỉnh thoảng một quỹ đạo in ra loạt lỗi QP
+(\texttt{MINSTEP}) rồi không kết thúc trong nhiều giờ. Khi resume, phần lớn chain treo lại đúng quỹ đạo cũ (tất định).
 \item \emph{Vị trí:} watchdog (\texttt{tools/ci/hang\_watchdog.sh}) chụp stack bằng gdb: luồng chính dùng 100\% CPU bên trong
-\texttt{ocp\_nlp\_sqp} $\to$ \texttt{d\_ocp\_qp\_ipm\_solve} (HPIPM) $\to$ \texttt{d\_ocp\_qp\_fact\_solve\_kkt\_step} $\to$ các
-kernel BLASFEO.
-\item \emph{Bản chất:} vòng lặp IPM và SQP đều bị chặn (100 và 50 vòng), nên đây là các lần giải \emph{chậm bệnh lý} (dữ liệu
-QP suy biến), không phải vòng lặp vô hạn; nguyên nhân số học chính xác chưa được chứng minh. Khi resume, 6/8 chain treo lại
-đúng quỹ đạo cũ (tất định); một chain vượt qua được (sai khác số học nhỏ giữa các máy).
-\item \emph{Đã làm:} ghim acados (commit \texttt{3edf443}); resume bắt buộc có checkpoint; watchdog dừng bước train sau 60
-phút không có file mới (lớn hơn thời gian xấu nhất của một quỹ đạo khi mọi bước đều hết giờ, $979\times2$ s
-$\approx33$ phút) để checkpoint được tải lên; \textbf{giới hạn thời gian mỗi lần giải}
-(\texttt{timeout\_max\_time} $=2$ s, kiểm tra sau mỗi vòng SQP; hết giờ $=$ status 7 $=$ lời giải không dùng được,
-tính vào $r_{\mathrm{fail}}$); log mỗi quỹ đạo ghi số lần hết giờ và thời gian giải lớn nhất, p99. Lời giải bình
-thường nhanh hơn nhiều so với 2 s, nên giới hạn này chỉ có tác dụng ở các lần giải bệnh lý; khi đó kết quả phụ
-thuộc tốc độ máy (công bố).
+\emph{một} lần giải QP: \texttt{ocp\_nlp\_sqp} $\to$ \texttt{d\_ocp\_qp\_ipm\_solve} (HPIPM) $\to$
+\texttt{d\_ocp\_qp\_fact\_solve\_kkt\_step} $\to$ kernel BLASFEO.
+\item \emph{Bản chất (chưa kết luận):} vòng lặp IPM và SQP đều bị chặn (100 và 50 vòng), nên đây là phép tính \emph{chậm bệnh
+lý} chứ không phải lặp vô hạn; giả thuyết đang kiểm tra là số học dưới chuẩn (subnormal) trong dữ liệu QP suy biến.
+Chẩn đoán: \texttt{experiments/d1\_diag\_replay.m} (workflow \texttt{d1-diag-replay.yml}) phát lại đúng quỹ đạo bị treo, ghi
+mọi lần giải chậm, và một biến thể bật flush-to-zero/denormals-are-zero (\texttt{tools/ci/d1\_set\_ftz.c}).
+\item \emph{Nguyên tắc:} ngân sách tính toán của teacher chỉ định nghĩa bằng \textbf{số vòng lặp} (tất định, không phụ thuộc
+máy); \textbf{không} dùng giới hạn thời gian (một bản thử giới hạn 2 s mỗi lần giải đã bị gỡ: phụ thuộc phần cứng, không có
+căn cứ, và không chặn được lần giải QP đơn lẻ). Cách sửa sẽ được chọn theo kết quả chẩn đoán và ghi vào đây.
+\item \emph{Công cụ CI (không thuộc phương pháp):} ghim acados (commit \texttt{3edf443}); resume bắt buộc có checkpoint; watchdog
+dừng bước train sau 60 phút không có file mới (quỹ đạo dài nhất đã xong là 101 s) để checkpoint được tải lên.
 \end{itemize}
 
 \noindent{\small\itshape Giới hạn đã biết: trung bình chi phí trên $M=5$ kịch bản KHÔNG tự tạo bảo đảm
@@ -448,8 +447,8 @@ r=-\big(\mathrm{RMSE}_{\mathrm{pos}} + 0.01\,\mathrm{RMS}(\Delta u) + 0.5\,r_{\m
 \]
 trong đó sai số vị trí mỗi bước bị chặn ở $5$ m; $\mathrm{RMS}(\Delta u)$ là căn trung bình bình phương độ
 thay đổi lệnh giữa hai bước; $r_{\mathrm{viol}}$ là tỉ lệ bước có $|\phi|$ hoặc $|\theta|>1.35$ rad;
-$r_{\mathrm{fail}}$ là tỉ lệ bước có lời giải teacher \textbf{không dùng được} (status $\notin\{0,2\}$, kể cả hết
-giờ, hoặc $\delta u_0$ không hữu hạn) --- cùng định nghĩa với luật áp dụng (Mục 7). Reward \emph{không} có thành
+$r_{\mathrm{fail}}$ là tỉ lệ bước có lời giải teacher \textbf{không dùng được} (status $\notin\{0,2\}$
+hoặc $\delta u_0$ không hữu hạn) --- cùng định nghĩa với luật áp dụng (Mục 7). Reward \emph{không} có thành
 phần vận tốc. Theo quy tắc bay chung (Mục 4.1), quỹ đạo luôn bay đủ $979$ bước; bước phân kỳ tính sai số $5$ m và
 một lần vi phạm tư thế, rồi bản sao plant được đặt lại trên tham chiếu. Reward được tính trên plant có gió.
 \item \textbf{Checkpoint đầy đủ} (actor/critic/$\alpha_{\mathrm{ent}}$/trạng thái Adam/buffer SAC $+$ bộ đếm,
@@ -457,7 +456,7 @@ $Q,R$ cuối $+$ \textbf{iter đang làm dở} (hành động $a$, chỉ số c�
 đã có, quỹ đạo kế tiếp) $+$ RNG) để \textbf{resume đến mức từng quỹ đạo}. Ghi đè cùng một file sau mỗi iter và
 mỗi $\ge120$ s giữa các quỹ đạo. Vòng lặp không bắt đầu một quỹ đạo mới nếu dự báo (lớn nhất của 5 quỹ đạo gần
 nhất) vượt ngân sách thời gian. Mỗi quỹ đạo in một dòng (tỉ lệ status hội tụ / chạm giới hạn vòng lặp / không
-dùng được, số lần hết giờ, thời gian giải lớn nhất và p99, số lần đặt lại do phân kỳ, thời gian).
+dùng được, thời gian giải lớn nhất và p99 (chỉ để chẩn đoán), số lần đặt lại do phân kỳ, thời gian).
 \item \textbf{Checkpoint mốc} (\texttt{D1\_\allowbreak CKPT\_\allowbreak EVERY\_\allowbreak ITER}, mặc định $50$): lưu bản cố định
 \texttt{checkpoint\_\allowbreak seed<s>\_\allowbreak iter<NNNN>.mat} (chỉ SAC/teacher). \textbf{Dừng đúng iter}
 (\texttt{D1\_STOP\_ITER}): khi đạt số iter chỉ định, vòng lặp dừng và lưu checkpoint ($0$ = tắt).
@@ -539,7 +538,7 @@ lệch.
 
 \textbf{Ngân sách} (\texttt{D1\_DAGGER\_ITERS}, mặc định $N_D=10$): $10\times20$ chuyến $\approx1.96\times10^5$
 lần giải teacher. Resume theo từng chuyến bay; mỗi chuyến in một dòng \texttt{DAGGER\_CASE} (ai bay, tỉ lệ nhãn,
-số lần hết giờ, thời gian giải, RMSE), mỗi vòng một dòng \texttt{DAGGER\_ITER} ($\lambda$, MSE kiểm định chéo,
+thời gian giải, RMSE), mỗi vòng một dòng \texttt{DAGGER\_ITER} ($\lambda$, MSE kiểm định chéo,
 $\rho_{\max}$, RMSE kiểm định).
 
 \textbf{Định lý áp dụng tới đâu.} Mất mát ridge lồi mạnh theo $W$ và Follow-the-Leader trên mất mát lồi mạnh là
@@ -751,7 +750,7 @@ Systems} (2002).
 \item \textbf{Bám quỹ đạo}: RMSE và max của sai số vị trí đã chặn $5$ m (Mục 4.1; căn lề bước $k$ so với
 $x_{\mathrm{ref},k+1}$, bước phân kỳ tính $5$ m), kèm số lần đặt lại do phân kỳ.
 \item \textbf{Pha SAC}: reward trung bình mỗi iter, tỉ lệ lời giải dùng được, $\alpha_{\mathrm{ent}}$; mỗi quỹ đạo:
-tỉ lệ status, số lần hết giờ, thời gian giải lớn nhất và p99.
+tỉ lệ status, thời gian giải lớn nhất và p99 (chẩn đoán).
 \item \textbf{Pha DAgger}: mỗi vòng: số nhãn, $\lambda$, MSE kiểm định chéo, $\rho_{\max}$, RMSE kiểm định; ứng
 viên được chọn; $\cL$ --- độ chính xác, tỉ lệ nền co rút; $\cS$ --- số mẫu, trung bình nhãn $s_k$.
 \item \textbf{So sánh} (\texttt{D1\_COMPARE=1}): mỗi họ 1 quỹ đạo của ngân hàng (mức giữa, hoặc khó nhất với
@@ -780,7 +779,7 @@ $Q_{\mathrm{aug}}=\mathrm{blkdiag}(Q_0,\ I/z_{\mathrm{allow}}^2)$ với $z_{\mat
 $R_0$, giải DARE $\to[K_x,K_I]$, $u=\mathrm{sat}(u_h-K_xe-K_Iz)$, anti-windup kiểu kẹp; \textbf{MPC tuyến tính}
 $N=5$: mô hình $x_{j+1}=A_dx_j+B_d(u_j-u_h)$, chi phí $\sum_{j=1}^{N-1}\norm{x_j-r_{k+j}}_{Q_0}^2+\norm{x_N-r_{k+N}}_{S}^2
 +\sum_{j=0}^{N-1}\norm{u_j-u_h}_{R_0}^2$, chặn hộp đầu vào, QP thu gọn giải bằng active-set KWIK có warm start;
-\textbf{Teacher} của chain (trọng số $a=\tanh(\mu)$, kịch bản theo seed, \texttt{SQP}, giới hạn 2 s mỗi lần giải)
+\textbf{Teacher} của chain (trọng số $a=\tanh(\mu)$, kịch bản theo seed, \texttt{SQP})
 được cho biết \emph{đúng} lực gió đo thực tại mỗi bước --- \textbf{cận trên (oracle)}, không triển khai được;
 \textbf{P}: bộ điều khiển đề xuất (\texttt{d1\_blend\_control} với $W^\star$ và tin cậy), \textbf{không} biết gió.
 \item \textbf{Điều kiện.} ``train'': 5 plant LHS mức $\rho_{\mathrm{train}}$ $\times$ 15 quỹ đạo từ ngân
@@ -813,10 +812,10 @@ Chân trời dự báo / điều khiển & $N$ / $N_c$ & $20$ / $5$ (move-blocki
 Số kịch bản robust & $M$ & $5$\\
 Cửa sổ co rút & $H$ & $20$ bước ($1.0$ s)\\
 Trọng số cuối kỳ & $Q_f$ & $Q_0$ (Bryson), cố định\\
-Solver NLP & -- & \texttt{SQP} ($\le50$ vòng), giới hạn $2$ s mỗi lần giải; acados ghim \texttt{3edf443}\\
+Solver NLP & -- & \texttt{SQP}: $\le50$ vòng SQP, mỗi QP $\le100$ vòng HPIPM (ngân sách tính bằng số vòng); acados ghim \texttt{3edf443}\\
 Thông tin gió của teacher & $F_k$ & lực gió hiện tại (đặc quyền), giữ không đổi trên tầm dự báo\\
 Tham chiếu của teacher & $(\bar x,\bar u)$ & flatness danh nghĩa với lực đẩy $m(a+ge_3)+D_vv-F_k$\\
-Áp nghiệm teacher & -- & status $0$ hoặc $2$ và hữu hạn; nếu không (kể cả hết giờ): giữ lệnh cũ, đặt lại solver\\
+Áp nghiệm teacher & -- & status $0$ hoặc $2$ và hữu hạn; nếu không: giữ lệnh cũ, đặt lại solver\\
 Tỉ lệ thất bại (reward) & $r_{\mathrm{fail}}$ & tỉ lệ bước giải không dùng được\\
 Phân kỳ & -- & lỗi tích phân, không hữu hạn hoặc $\norm{p}>10^4$ m; đặt lại trên tham chiếu, bay đủ\\
 Sai số bám & $e_k$ & chặn $5$ m; bước phân kỳ $=5$ m\\

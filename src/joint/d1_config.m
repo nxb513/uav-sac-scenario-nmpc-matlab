@@ -30,9 +30,6 @@ cfg.logMultBounds = [10^(-cfg.logMultDec), 10^(cfg.logMultDec)];
 % Bryson in BOTH (fixed yardstick).
 cfg.randomQR = strcmp(d1_getenv_str('D1_RANDOM_QR','0'),'1');
 cfg.rqrLog   = [-2, 2];                              % random base: 10^[-2,2] per weight
-% teacher solve time limit (acados timeout_max_time, SQP): a solve that exceeds it ends with
-% status 7 (ACADOS_TIMEOUT) = unusable. Normal solves take a small fraction of it.
-cfg.solveTimeout = 2.0;                              % [s]
 % linear student Du = W*phi (d1_student_feature, 27 features, no bias) learned by DAgger
 cfg.nPhi = 27;
 cfg.resHalf = cfg.uHi - cfg.uLo;                     % target normalization = actuator range

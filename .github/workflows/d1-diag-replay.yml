@@ -1,0 +1,99 @@
+name: D1 diagnostic replay (solver hang)
+
+# DIAGNOSTIC only, not part of the method: replays the pending SAC iteration of a chain's
+# checkpoint exactly as training flies the teacher (experiments/d1_diag_replay.m) and prints
+# every slow solve. variant "ftz" first sets flush-to-zero / denormals-are-zero in the MATLAB
+# thread (tools/ci/d1_set_ftz.c) to test whether subnormal arithmetic causes the slowness.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: "Run id holding the checkpoint artifacts (d1-joint-ckpt-seed<seed>-<run>)"
+        required: true
+        type: string
+      seeds:
+        description: "JSON list of [seed, random_qr, logmult_dec] triples"
+        required: true
+        type: string
+      variants:
+        description: 'JSON list of variants ("off", "ftz")'
+        required: true
+        default: '["off","ftz"]'
+        type: string
+
+jobs:
+  replay:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        chain: ${{ fromJSON(inputs.seeds) }}
+        variant: ${{ fromJSON(inputs.variants) }}
+    env:
+      D1_SEED: ${{ matrix.chain[0] }}
+      D1_RANDOM_QR: ${{ matrix.chain[1] }}
+      D1_LOGMULT_DEC: ${{ matrix.chain[2] }}
+      D1_SOLVER: SQP
+      D1_STEPS: "1000"
+      D1_CASES_PER_EVAL: "20"
+      D1_WIND: "1"
+      D1_FTZ: ${{ matrix.variant == 'ftz' && '1' || '0' }}
+      D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.chain[0] }}
+      ACADOS_COMMIT: 3edf4435e7d88d8a4d1c5c3a4f613f032aae658f
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: d1-joint-ckpt-seed${{ matrix.chain[0] }}-${{ inputs.run }}
+          path: results/d1_joint/seed${{ matrix.chain[0] }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.run }}
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential git unzip wget
+      - name: Clone and build acados (pinned)
+        run: |
+          set -euxo pipefail
+          git clone https://github.com/acados/acados.git "$GITHUB_WORKSPACE/acados"
+          cd "$GITHUB_WORKSPACE/acados"
+          git checkout "$ACADOS_COMMIT"
+          git submodule update --recursive --init
+          mkdir -p build && cd build
+          cmake -DACADOS_WITH_QPOASES=ON -DACADOS_INSTALL_DIR="$GITHUB_WORKSPACE/acados" ..
+          make install -j4
+          echo "ACADOS_INSTALL_DIR=$GITHUB_WORKSPACE/acados" >> "$GITHUB_ENV"
+          echo "ACADOS_SOURCE_DIR=$GITHUB_WORKSPACE/acados" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/acados/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+      - name: Download CasADi (MATLAB, linux64)
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/acados/external/casadi-matlab"
+          cd "$GITHUB_WORKSPACE/acados/external/casadi-matlab"
+          wget -q https://github.com/casadi/casadi/releases/download/3.6.7/casadi-3.6.7-linux64-matlab2018b.zip -O casadi.zip
+          unzip -q casadi.zip && rm -f casadi.zip
+          echo "CASADI_DIR=$GITHUB_WORKSPACE/acados/external/casadi-matlab" >> "$GITHUB_ENV"
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: >-
+            Deep_Learning_Toolbox
+            Optimization_Toolbox
+            Control_System_Toolbox
+            Statistics_and_Machine_Learning_Toolbox
+          cache: true
+      - name: Replay (${{ matrix.chain[0] }}, ${{ matrix.variant }})
+        timeout-minutes: 75
+        uses: matlab-actions/run-command@v3
+        with:
+          command: >-
+            setenv('ENV_RUN','true');
+            setenv('ACADOS_INSTALL_DIR',getenv('ACADOS_INSTALL_DIR'));
+            addpath(getenv('CASADI_DIR'));
+            addpath(fullfile(getenv('ACADOS_INSTALL_DIR'),'interfaces','acados_matlab_octave'));
+            mex('-outdir', 'tools/ci', 'tools/ci/d1_set_ftz.c'); addpath('tools/ci');
+            addpath(genpath('src')); addpath('configs'); addpath('experiments');
+            d1_diag_replay;

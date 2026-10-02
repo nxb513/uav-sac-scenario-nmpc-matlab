@@ -45,8 +45,8 @@ if noTeacher
         min(eig(lqr.P)), numel(cases));
 else
     teacher = d1_teacher_build_solver(cfg, scen);
-    fprintf('built teacher(acados M=%d Nc=%d, privileged wind, timeout %.1fs) + LQR(P minEig=%.4g) + %d cases\n', ...
-        cfg.M, cfg.Nc, cfg.solveTimeout, min(eig(lqr.P)), numel(cases));
+    fprintf('built teacher(acados M=%d Nc=%d, privileged wind) + LQR(P minEig=%.4g) + %d cases\n', ...
+        cfg.M, cfg.Nc, min(eig(lqr.P)), numel(cases));
 end
 
 % ---- files --------------------------------------------------------------------
@@ -188,7 +188,7 @@ Ts = cfg.Ts; theta = cfg.plant.nominal; uh = cfg.uh;
 Xref = kase.Xref; T = d1_case_len(Xref, cfg);
 xN = Xref(:,1); xL = Xref(:,1); uprev = uh;
 posErrN = zeros(T,1); duAcc = 0; cViol = 0; prevU = uh;
-tCase = tic; nSt = [0 0 0 0];                        % converged / max-iter / unusable / timeout
+tCase = tic; nSt = [0 0 0];                          % converged / max-iter / unusable
 tsol = zeros(1,T);
 nDivN = 0; nDivL = 0;                                % divergence restarts (teacher copy / LQR copy)
 EL = zeros(12, T+1); EL(:,1) = xL - Xref(:,1);       % LQR error traj for g_H
@@ -201,7 +201,7 @@ for k = 1:T
     F = d1_wind_now(ds, t, xN, uprev, theta);
     [uN, status, usable, tsol(k)] = d1_teacher_step(teacher, xN, uprev, Xref, k, F, cfg);
     uN = d1_sat(uN, cfg); uprev = uN;
-    nSt = nSt + [status == 0, status == 2, ~usable, status == 7];
+    nSt = nSt + [status == 0, status == 2, ~usable];
     [xNnext, divN] = d1_plant_step(t, xN, uN, Ts, theta, ds);
     duAcc = duAcc + sum((uN-prevU).^2); prevU = uN;
     if divN
@@ -240,9 +240,9 @@ catch
     cLdata = [];
 end
 if isempty(cLdata), cLdata = zeros(0,1); end
-fprintf(['  CASE %-26s steps=%4d conv=%.2f maxit=%.2f unusable=%.2f timeouts=%d ' ...
+fprintf(['  CASE %-26s steps=%4d conv=%.2f maxit=%.2f unusable=%.2f ' ...
     'tsolve max=%.0fms p99=%.0fms restarts NMPC=%d LQR=%d t=%.0fs\n'], ...
-    kase.groupId, T, nSt(1:3)/T, nSt(4), 1e3*max(tsol), 1e3*prctile(tsol,99), nDivN, nDivL, toc(tCase));
+    kase.groupId, T, nSt/T, 1e3*max(tsol), 1e3*prctile(tsol,99), nDivN, nDivL, toc(tCase));
 end
 
 % ---- manual SAC (1-step bandit; per-rollout Q,R tuner) ----------------------

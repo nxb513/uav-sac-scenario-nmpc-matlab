@@ -4,18 +4,21 @@
 
 The public package contains, for method D1 (`docs/D1_method.pdf`):
 
-- the training pipeline `experiments/run_d1_joint_pipeline.m` and the final evaluation
-  `experiments/d1_final_eval.m`;
+- the pipeline `experiments/run_d1_joint_pipeline.m` (SAC phase, DAgger phase,
+  diagnostic modes) and the final evaluation `experiments/d1_final_eval.m`;
 - the shared D1 definitions `src/joint/d1_*.m` (configuration, flight rules, acados
-  teacher with wind parameter, teacher target/step, surrogate history/feature, deployed
-  blend) and the plant/reference utilities they call (`configs/step1_plant_config.m`,
-  `quad_dynamics`, `quad_step_rk4`, reference generators, `targeted_lqr_weak_config`);
-- the workflows `d1-joint-pipeline.yml` and `d1-final-eval.yml`;
-- `tools/wind/` (download + conversion of measured wind inside CI jobs) and
-  `tools/eval/summarize_final_eval.py`;
-- the method document `docs/D1_method.tex/.pdf`.
+  teacher with wind parameter, teacher target/step, linear student features, DAgger,
+  ridge fit, stability check, confidences, deployed blend) and the plant/reference
+  utilities they call (`configs/step1_plant_config.m`, `quad_dynamics`, `quad_step_rk4`,
+  reference generators, `targeted_lqr_weak_config`);
+- the workflows `d1-joint-pipeline.yml`, `d1-final-eval.yml` and the diagnostic
+  `d1-diag-replay.yml` (with `experiments/d1_diag_replay.m`, `tools/ci/d1_set_ftz.c`);
+- `tools/wind/` (download + conversion of measured wind inside CI jobs),
+  `tools/eval/summarize_final_eval.py` and `tools/ci/hang_watchdog.sh`;
+- the method document `docs/D1_method.tex/.pdf` and the design note
+  `docs/D1_student_design.tex/.pdf`.
 
-Explicitly excluded for D1: trained checkpoints and deployed pairs (they exist only as
+Explicitly excluded for D1: SAC checkpoints and student files (they exist only as
 GitHub Actions artifacts of the runs), measured wind data (Neural-Fly is not
 redistributable; SWUF-3D is fetched from Zenodo), and evaluation outputs.
 
