@@ -86,7 +86,7 @@ ba thành phần và một luật hợp nhất:
 trọng số theo \textbf{quy tắc Bryson}. Cho ma trận Lyapunov $P$ và bộ điều khiển ổn định vùng.
 \item \textbf{Teacher = NMPC-scenario ($M{=}5$)} — bộ NMPC bền vững chạy ngoại tuyến. \textbf{SAC} tinh chỉnh
 trọng số $Q,R$ của NMPC, \textbf{khởi tạo từ Bryson} (chain đối chứng: gốc ngẫu nhiên), không giới hạn phạm vi
-tìm, chạy tới iter 200 và được đánh giá ở các mốc 100, 150, 200 (Mục 8). Teacher được \textbf{biết lực gió hiện tại} (thông tin
+tìm, dừng ở iter 100; checkpoint của mọi iter được giữ để khảo sát cần train bao lâu (Mục 8). Teacher được \textbf{biết lực gió hiện tại} (thông tin
 đặc quyền, chỉ có trong mô phỏng): lực này vào mô hình dự báo và vào tham chiếu nhất quán với gió (Mục 7).
 Teacher không được triển khai.
 \item \textbf{Học trò tuyến tính} — $\Delta u=W\varphi$ với 27 đặc trưng rẻ $\varphi$ (sai số trạng thái, lực ngoài
@@ -115,7 +115,7 @@ Mỗi hạt giống (seed) là một \textbf{chain} gồm \textbf{hai pha offlin
 \toprule
 \textbf{Pha} & \textbf{Ai bay} & \textbf{Kết quả}\\
 \midrule
-1. SAC (iter $1..200$) & teacher (SAC thử $Q,R$; biết gió) $+$ LQR song song, cùng một mẫu gió & reward cho SAC;
+1. SAC (iter $1..100$) & teacher (SAC thử $Q,R$; biết gió) $+$ LQR song song, cùng một mẫu gió & reward cho SAC;
 checkpoint SAC (= teacher) lưu riêng \textbf{sau mỗi iter}. \textbf{Không} học học trò trong pha này\\
 2. DAgger (teacher đóng băng) & vòng 1: teacher; vòng $\ge2$: học trò ($\alpha=1$), teacher chỉ được \emph{hỏi} & dữ
 liệu gộp, các ứng viên $W_i$, chọn $W^\star$ trên tập kiểm định, rồi $\cS$, $\cL$ $\to$ file học trò\\
@@ -438,7 +438,7 @@ solver và được xử lý theo quy tắc ``không dùng được'' sẵn có.
 thời gian (bản thử giới hạn 2 s đã bị gỡ).
 \item \emph{Hệ quả:} mọi chain huấn luyện trên \texttt{3edf443} bị thay thế. Sau đó (2026-10-03) thiết kế huấn luyện được
 chốt lại: 2 chain (Bryson, ngẫu nhiên), hành động SAC không bị chặn, chạy song song, checkpoint mỗi iter, dừng ở
-iter 100 (sau đó nâng lên 200, đánh giá ở các mốc 100, 150, 200), ngưỡng khởi động SAC $10$; chạy từ đầu trên v0.6.0.
+iter 100, ngưỡng khởi động SAC $10$; chạy từ đầu trên v0.6.0.
 \item \emph{Công cụ CI (không thuộc phương pháp):} ghim acados v0.6.0; resume bắt buộc có checkpoint; watchdog dừng bước
 train sau 60 phút không có file mới để checkpoint được tải lên.
 \end{itemize}
@@ -463,7 +463,7 @@ $3{\times}10^{-4}$; buffer $5{\times}10^4$ cặp $(a,r)$, batch 256; 1 lần c�
 \item \textbf{Khởi động:} SAC chỉ bắt đầu cập nhật khi buffer có $\ge10$ mẫu (\texttt{cfg.sacWarmup}), \textbf{tức từ
 iter thứ 10}; trước đó hành động là mẫu ngẫu nhiên từ phân phối khởi tạo (quanh $a=0$, tức quanh gốc;
 $\sigma=e^{-0.5}\approx0.61$ decade), mỗi iter một bộ $Q,R$ khác nhau. Ngưỡng $10$ là siêu tham số chọn (không tối
-ưu). Tại các mốc đánh giá $100$, $150$, $200$, SAC đã cập nhật $91$, $141$, $191$ lần.
+ưu). Đến iter $100$, SAC đã cập nhật $91$ lần.
 \item Phần thưởng mỗi quỹ đạo (reward của iter là trung bình trên $20$ quỹ đạo):
 \[
 r=-\big(\mathrm{RMSE}_{\mathrm{pos}} + 0.01\,\mathrm{RMS}(\Delta u) + 0.5\,r_{\mathrm{viol}}
@@ -485,11 +485,12 @@ gần nhất) vượt ngân sách thời gian của job. Mỗi quỹ đạo in m
 lặp / không dùng được, thời gian giải lớn nhất và p99 (chỉ để chẩn đoán), số lần đặt lại do phân kỳ, thời gian).
 \item \textbf{Checkpoint mốc} (\texttt{D1\_\allowbreak CKPT\_\allowbreak EVERY\_\allowbreak ITER}, mặc định $1$): lưu bản cố định
 \texttt{checkpoint\_\allowbreak seed<s>\_\allowbreak iter<NNNN>.mat} sau \textbf{mỗi iter} (chỉ SAC/teacher), dùng được làm teacher
-cho DAgger tại bất kỳ iter nào. \textbf{Dừng đúng iter} (\texttt{D1\_STOP\_ITER}): chạy tới $200$; teacher được
-đánh giá ở các mốc $100$, $150$, $200$.
+cho DAgger tại bất kỳ iter nào. \textbf{Dừng đúng iter} (\texttt{D1\_STOP\_ITER}): dừng ở $100$. Vì mọi iter đều có
+checkpoint, đường hiệu suất theo số iter (khảo sát cần train bao lâu) được dựng sau khi train, từ các checkpoint
+này, không làm thay đổi quá trình train.
 \item \textbf{Hai chain:} (1) gốc Bryson, seed \texttt{261003001}; (2) gốc ngẫu nhiên (\texttt{D1\_RANDOM\_QR=1}):
 log-uniform $10^{[-2,2]}$ mỗi trọng số, cố định theo seed \texttt{261003101}. LQR luôn dùng Bryson. Cả hai cùng quy
-tắc: hành động không bị chặn, chạy tới iter $200$. Hai chain dùng chung nhiễu thăm dò, quỹ đạo và gió (so sánh
+tắc: hành động không bị chặn, dừng ở iter $100$. Hai chain dùng chung nhiễu thăm dò, quỹ đạo và gió (so sánh
 cặp; xem lưu ý về bộ sinh số ở Mục 2).
 \end{itemize}
 {\small\itshape Nguồn: Haarnoja et al. (2018), Soft Actor-Critic. Lưu ý: dùng RL để tinh chỉnh trọng số
@@ -852,7 +853,7 @@ Sai số bám & $e_k$ & chặn $5$ m; bước phân kỳ $=5$ m\\
 Một lần chấm SAC & -- & 20 quỹ đạo rút có hoàn lại từ 120\\
 Môi trường huấn luyện & -- & plant danh nghĩa $+$ gió ngẫu nhiên, không nhiễu cảm biến\\
 Gió & $U$; gió giật; lực & $\mathcal U[1,10]$ m/s; Dryden $h=20$ ft; rotor drag $0.425,0.256,0$ s$^{-1}$\\
-Checkpoint mốc / dừng & -- & mỗi iter (chỉ SAC/teacher); chạy tới iter $200$, đánh giá ở mốc 100, 150, 200\\
+Checkpoint mốc / dừng & -- & mỗi iter (chỉ SAC/teacher); dừng ở iter $100$\\
 Hành động SAC & $a$ & $\in\mathbb R^6$, $\log_{10}$ hệ số nhân của gốc $Q,R$, không bị chặn\\
 Chain & -- & Bryson (seed 261003001); gốc ngẫu nhiên $10^{[-2,2]}$ (seed 261003101)\\
 Chạy song song & -- & 4 worker cục bộ / iteration (SAC và DAgger); không đổi kết quả\\
