@@ -121,6 +121,9 @@ ocp.solver_options.levenberg_marquardt = 1e-3;   % regularize -> avoid QP NaN
 ocp.solver_options.qp_solver_iter_max = 100;
 
 if nargin < 3, reuse = false; end
+% fixed name: acados otherwise appends a hash of the OCP object that differs between MATLAB
+% processes, so a worker would look for differently named generated code
+ocp.name = 'ocp_d1_quad_teacher_m5w';
 ocp.code_gen_options.code_export_directory = cfg.codegenDir;
 opts = struct('output_dir', fullfile(fileparts(cfg.codegenDir), 'build'));
 if reuse
