@@ -1,9 +1,9 @@
 function [Q, R] = d1_action_to_QR(a, cfg)
-%D1_ACTION_TO_QR SAC action a in [-1,1]^6 -> teacher weights: 6 log-multipliers
-% (pos, att, vel, rate, thrust, torques) in 10^[-dec, +dec] around the base Q0, R0.
+%D1_ACTION_TO_QR SAC action a in R^6 (unbounded) -> teacher weights: a = log10 of the
+% multipliers of 6 weight groups (pos, att, vel, rate, thrust, torques) of the base Q0, R0,
+% i.e. mult = 10.^a; a = 0 gives exactly the base.
 [Q0, R0] = qr_base(cfg);                            % Bryson, or random (no-Bryson)
-lo = log(cfg.logMultBounds(1)); hi = log(cfg.logMultBounds(2));
-mult = exp(lo + 0.5*(a(:)+1)*(hi-lo));
+mult = 10.^a(:);
 q = diag(Q0);
 q(1:3)=q(1:3)*mult(1); q(4:6)=q(4:6)*mult(2);
 q(7:9)=q(7:9)*mult(3); q(10:12)=q(10:12)*mult(4);

@@ -21,10 +21,9 @@ cfg.uh = [cfg.plant.m*cfg.plant.g; 0; 0; 0];         % hover input
 cfg.refYaw = 0;                                      % heading of every D1 reference
                                                      % (quad_sample_targeted_reference_options)
 cfg.actionDim = 6;                                  % Q:{pos,att,vel,rate}, R:{T,tau}
-% SAC Q,R search half-width in decades around the base (mult in 10^[-dec, +dec]).
-% Default 1.5 (0.03x..32x, wide). Smaller = SAC stays CLOSER to the base.
-cfg.logMultDec = d1_getenv_num('D1_LOGMULT_DEC', 1.5);
-cfg.logMultBounds = [10^(-cfg.logMultDec), 10^(cfg.logMultDec)];
+% SAC action a in R^6 = log10 multipliers of the base Q,R groups (d1_action_to_QR), NOT
+% bounded: the policy is an unsquashed Gaussian, so SAC can move Q,R arbitrarily far
+% from the base (no search-range parameter).
 % Q,R base for the SAC-tuned teacher: 0 = Bryson warm-start (default), 1 = RANDOM
 % (no Bryson) log-uniform diag weights, deterministic per seed. The LQR baseline stays
 % Bryson in BOTH (fixed yardstick).
@@ -49,15 +48,21 @@ cfg.alphaSafe = strcmp(d1_getenv_str('D1_ALPHA_SAFE','0'),'1');
 cfg.csCases = 40;                                    % student alpha=1 flights for the c_S labels
 cfg.cLqrCases = 60;                                  % LQR flights for the c_LQR labels
 % which SAC checkpoint the student belongs to: '' = checkpoint_seed<s>.mat,
-% '_iter0500' = milestone checkpoint_seed<s>_iter0500.mat (student file gets the same suffix)
+% '_iter0100' = milestone checkpoint_seed<s>_iter0100.mat (student file gets the same suffix)
 cfg.ckptSuffix = d1_getenv_str('D1_CKPT_SUFFIX', '');
 % sac
 cfg.sacLR = 3e-4; cfg.sacBatch = 256; cfg.sacBufferCap = 5e4;
 cfg.sacGamma = 0.0;                                  % 1-step bandit (done each ep)
 cfg.sacTargetEntropy = -cfg.actionDim;
-cfg.logEvery = 1; cfg.checkpointEverySec = 120;
-% frozen milestone checkpoints (+ their own confidences) every N SAC iterations; 0 = off
-cfg.ckptEvery = d1_getenv_num('D1_CKPT_EVERY_ITER', 50);
+cfg.logEvery = 1;
+% frozen milestone checkpoint checkpoint_seed<s>_iter<NNNN>.mat every N SAC iterations
+% (1 = every iteration); 0 = off
+cfg.ckptEvery = d1_getenv_num('D1_CKPT_EVERY_ITER', 1);
+% parallel flights: the flights of one SAC iteration / DAgger iteration run on this many
+% local workers (d1_teacher_pool); 0 = serial on the client. Results do not depend on it.
+cfg.nWorkers = d1_getenv_num('D1_WORKERS', 4);
+% acados code generated once by the client and loaded by every worker (absolute path)
+cfg.codegenDir = fullfile(pwd, 'd1_teacher_codegen');
 % training wind (random, synthetic; NO measured wind data is used): see d1_sample_wind
 cfg.windOn   = strcmp(d1_getenv_str('D1_WIND','1'),'1');
 cfg.windMin  = d1_getenv_num('D1_WIND_MIN', 1);      % mean wind speed range [m/s]

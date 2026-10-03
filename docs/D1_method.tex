@@ -114,8 +114,8 @@ Mỗi hạt giống (seed) là một \textbf{chain} gồm \textbf{hai pha offlin
 \toprule
 \textbf{Pha} & \textbf{Ai bay} & \textbf{Kết quả}\\
 \midrule
-1. SAC (iter $1..500$) & teacher (SAC thử $Q,R$; biết gió) $+$ LQR song song, cùng một mẫu gió & reward cho SAC;
-checkpoint SAC (= teacher); mốc mỗi 50 iter. \textbf{Không} học học trò trong pha này\\
+1. SAC (iter $1..100$) & teacher (SAC thử $Q,R$; biết gió) $+$ LQR song song, cùng một mẫu gió & reward cho SAC;
+checkpoint SAC (= teacher) lưu riêng \textbf{sau mỗi iter}. \textbf{Không} học học trò trong pha này\\
 2. DAgger (teacher đóng băng) & vòng 1: teacher; vòng $\ge2$: học trò ($\alpha=1$), teacher chỉ được \emph{hỏi} & dữ
 liệu gộp, các ứng viên $W_i$, chọn $W^\star$ trên tập kiểm định, rồi $\cS$, $\cL$ $\to$ file học trò\\
 \bottomrule
@@ -123,9 +123,12 @@ liệu gộp, các ứng viên $W_i$, chọn $W^\star$ trên tập kiểm địn
 \end{center}
 Tách hai pha vì định lý của DAgger cần \textbf{chuyên gia cố định}: trong lúc SAC còn đổi $Q,R$ thì teacher
 còn thay đổi. Pha 2 chạy trên checkpoint chỉ định (\texttt{D1\_DAGGER=1}, \texttt{D1\_CKPT\_SUFFIX}, ví dụ mốc
-\texttt{\_iter0500}) và ghi \texttt{student\_seed<s><suffix>.mat} ($W^\star$ $+$ tin cậy) --- đây là bộ điều khiển
-triển khai. Hai pha đều \textbf{resume được}: pha 1 đến mức từng quỹ đạo (Mục 8), pha 2 đến mức từng chuyến bay
-(file trạng thái \texttt{dagger\_seed<s><suffix>.mat}). Mọi lượt bay dùng để học đều có \textbf{gió ngẫu nhiên}
+\texttt{\_iter0100}) và ghi \texttt{student\_seed<s><suffix>.mat} ($W^\star$ $+$ tin cậy) --- đây là bộ điều khiển
+triển khai. Hai pha đều \textbf{resume được} đến mức từng iteration (pha 1: checkpoint SAC; pha 2: file trạng thái
+\texttt{dagger\_seed<s><suffix>.mat}). Các chuyến bay của một iteration (20 quỹ đạo SAC hoặc 20 chuyến DAgger)
+chạy \textbf{song song} trên các worker cục bộ (\texttt{d1\_teacher\_pool}, mặc định 4); gió của từng chuyến được
+rút \emph{tuần tự} trên client trước khi bay, mỗi chuyến tự đặt lại solver và trọng số, nên kết quả không phụ thuộc
+số worker hay chuyến nào chạy trên worker nào. Mọi lượt bay dùng để học đều có \textbf{gió ngẫu nhiên}
 (Mục 4). Khi triển khai chỉ còn LQR $+$ $W\varphi$ $+$ hai logistic; \textbf{không} giải NMPC.
 
 % ===================== 2 =====================
@@ -413,7 +416,8 @@ HPIPM \texttt{bad1123}, trong đó bước hiệu chỉnh quán tính (thêm và
 liệu KKT không hữu hạn, \texttt{preg} lên $\infty$, phân rã suy biến mãi $\Rightarrow$ vòng lặp vô hạn. Dữ liệu như vậy xuất
 hiện khi teacher được hỏi tại trạng thái plant đã nổ số (ví dụ $\|\omega\|=2.4\cdot10^4$ và $8\cdot10^{10}$ rad/s ở hai lần treo
 được phát lại; luật bay chung vẫn cho bay tiếp tới khi trạng thái không hữu hạn).
-\item \emph{Bằng chứng:} \texttt{experiments/d1\_diag\_replay.m} (workflow \texttt{d1-diag-replay.yml}) phát lại đúng iteration
+\item \emph{Bằng chứng:} công cụ phát lại \texttt{experiments/d1\_diag\_replay.m} (workflow \texttt{d1-diag-replay.yml}; mọi công
+cụ chẩn đoán trong mục này có ở commit \texttt{7f60828}, đã gỡ khỏi repo vì chỉ đọc được checkpoint dạng cũ) phát lại đúng iteration
 bị treo; heartbeat trước mỗi lần giải và gdb trên bản build \texttt{-g} (\texttt{tools/ci/diag\_watchdog.sh},
 \texttt{diag\_gdb.py}): ba lần chụp cách 30 s đều ở vòng IPM đầu tiên ($kk=0$), \texttt{preg}$=\infty$ trong
 \texttt{d\_ocp\_qp\_fact\_solve\_kkt\_step}. Biến thể flush-to-zero (\texttt{tools/ci/d1\_set\_ftz.c}) và kiểm tra kích thước
@@ -424,7 +428,9 @@ v0.6.0: cả hai quỹ đạo chạy hết (50 s và 84 s), lời giải lâu nh
 solver và được xử lý theo quy tắc ``không dùng được'' sẵn có. Luật bay chung giữ nguyên.
 \item \emph{Nguyên tắc:} ngân sách tính toán của teacher chỉ định nghĩa bằng \textbf{số vòng lặp}; \textbf{không} dùng giới hạn
 thời gian (bản thử giới hạn 2 s đã bị gỡ).
-\item \emph{Hệ quả:} mọi chain huấn luyện trên \texttt{3edf443} bị thay thế; cả 8 chain chạy lại từ đầu trên v0.6.0.
+\item \emph{Hệ quả:} mọi chain huấn luyện trên \texttt{3edf443} bị thay thế. Sau đó (2026-10-03) thiết kế huấn luyện được
+chốt lại: 2 chain (Bryson, ngẫu nhiên), hành động SAC không bị chặn, chạy song song, checkpoint mỗi iter, dừng ở
+iter 100; chạy từ đầu trên v0.6.0.
 \item \emph{Công cụ CI (không thuộc phương pháp):} ghim acados v0.6.0; resume bắt buộc có checkpoint; watchdog dừng bước
 train sau 60 phút không có file mới để checkpoint được tải lên.
 \end{itemize}
@@ -433,20 +439,22 @@ train sau 60 phút không có file mới để checkpoint được tải lên.
 robust trên toàn miền bất định; đây là hedge kinh nghiệm, không phải chứng nhận min--max.}
 
 % ===================== 7 =====================
-\section{SAC tinh chỉnh $Q,R$ (khởi tạo Bryson)}
-Đây là \textbf{pha 1} (Mục 2). \textbf{Ý đồ:} khởi tạo $Q,R=$ Bryson để reward \textbf{tốt ngay từ đầu}; SAC
-chỉ tinh chỉnh quanh đó. Pha này \textbf{chỉ} tune teacher; không thu nhãn, không học học trò. Nhánh
+\section{SAC tinh chỉnh $Q,R$ (khởi tạo Bryson hoặc ngẫu nhiên)}
+Đây là \textbf{pha 1} (Mục 2). \textbf{Ý đồ:} khởi tạo $Q,R$ tại một gốc (Bryson, hoặc ngẫu nhiên ở chain đối
+chứng) rồi để SAC tinh chỉnh, \textbf{không giới hạn} phạm vi tìm. Pha này \textbf{chỉ} tune teacher; không thu nhãn, không học học trò. Nhánh
 \textbf{LQR} bay song song trên bản sao plant riêng chỉ ghi dữ liệu co rút $g_H$ làm chẩn đoán.
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
-\item Hành động $a\in[-1,1]^6$ ánh xạ sang \textbf{log-multiplier} cho 4 nhóm $Q$ (pos/att/vel/rate) và 2
-nhóm $R$ ($T/\tau$), dải $[10^{-d},10^{d}]$ \textbf{quanh Bryson}, $d=$ \texttt{D1\_LOGMULT\_DEC}
-(mặc định $1.5$); $a=0\Rightarrow$ đúng Bryson.
-\item SAC dạng \textbf{bandit 1 bước} ($\gamma=0$): actor Gaussian trạng thái-độc-lập ép qua $\tanh$,
+\item Hành động $a\in\mathbb R^6$ (\textbf{không bị chặn}) là $\log_{10}$ của hệ số nhân cho 4 nhóm $Q$
+(pos/att/vel/rate) và 2 nhóm $R$ ($T/\tau$) của gốc: hệ số $=10^{a}$; $a=0\Rightarrow$ đúng gốc. Không có tham
+số dải tìm.
+\item SAC dạng \textbf{bandit 1 bước} ($\gamma=0$): actor Gaussian trạng thái-độc-lập \textbf{không ép} $\tanh$
+(dạng SAC cho hành động không bị chặn; log-xác suất Gaussian thuần),
 khởi tạo $\mu=0$, $\log\sigma=-0.5$; hai critic MLP 64-64 (ReLU) học $Q(a)\approx r$ (không bootstrap,
 không mạng target); $\alpha_{\mathrm{ent}}$ khởi tạo 1, tự chỉnh với entropy mục tiêu $-6$; Adam, lr
 $3{\times}10^{-4}$; buffer $5{\times}10^4$ cặp $(a,r)$, batch 256; 1 lần cập nhật mỗi iter.
 \item \textbf{SAC chỉ bắt đầu cập nhật khi buffer có $\ge64$ mẫu, tức từ iter thứ 64}; trước đó hành động là
-mẫu ngẫu nhiên từ phân phối khởi tạo (quanh $a=0$, tức quanh Bryson).
+mẫu ngẫu nhiên từ phân phối khởi tạo (quanh $a=0$, tức quanh gốc; $\sigma=e^{-0.5}\approx0.61$ decade).
+Với mục tiêu $100$ iter, SAC có $37$ lần cập nhật.
 \item Phần thưởng mỗi quỹ đạo (reward của iter là trung bình trên $20$ quỹ đạo):
 \[
 r=-\big(\mathrm{RMSE}_{\mathrm{pos}} + 0.01\,\mathrm{RMS}(\Delta u) + 0.5\,r_{\mathrm{viol}}
@@ -458,17 +466,20 @@ $r_{\mathrm{fail}}$ là tỉ lệ bước có lời giải teacher \textbf{khôn
 hoặc $\delta u_0$ không hữu hạn) --- cùng định nghĩa với luật áp dụng (Mục 7). Reward \emph{không} có thành
 phần vận tốc. Theo quy tắc bay chung (Mục 4.1), quỹ đạo luôn bay đủ $979$ bước; bước phân kỳ tính sai số $5$ m và
 một lần vi phạm tư thế, rồi bản sao plant được đặt lại trên tham chiếu. Reward được tính trên plant có gió.
+\item \textbf{Một iteration:} client rút hành động $a$, 20 chỉ số quỹ đạo và gió của từng quỹ đạo \emph{theo thứ
+tự} từ dòng ngẫu nhiên của run; 20 rollout cặp chạy song song trên các worker (mỗi worker có solver riêng nạp
+từ cùng mã acados do client sinh, \texttt{d1\_teacher\_pool}); kết quả gom theo thứ tự quỹ đạo.
 \item \textbf{Checkpoint đầy đủ} (actor/critic/$\alpha_{\mathrm{ent}}$/trạng thái Adam/buffer SAC $+$ bộ đếm,
-$Q,R$ cuối $+$ \textbf{iter đang làm dở} (hành động $a$, chỉ số các quỹ đạo, reward và tỉ lệ lời giải dùng được
-đã có, quỹ đạo kế tiếp) $+$ RNG) để \textbf{resume đến mức từng quỹ đạo}. Ghi đè cùng một file sau mỗi iter và
-mỗi $\ge120$ s giữa các quỹ đạo. Vòng lặp không bắt đầu một quỹ đạo mới nếu dự báo (lớn nhất của 5 quỹ đạo gần
-nhất) vượt ngân sách thời gian. Mỗi quỹ đạo in một dòng (tỉ lệ status hội tụ / chạm giới hạn vòng lặp / không
-dùng được, thời gian giải lớn nhất và p99 (chỉ để chẩn đoán), số lần đặt lại do phân kỳ, thời gian).
-\item \textbf{Checkpoint mốc} (\texttt{D1\_\allowbreak CKPT\_\allowbreak EVERY\_\allowbreak ITER}, mặc định $50$): lưu bản cố định
-\texttt{checkpoint\_\allowbreak seed<s>\_\allowbreak iter<NNNN>.mat} (chỉ SAC/teacher). \textbf{Dừng đúng iter}
-(\texttt{D1\_STOP\_ITER}): khi đạt số iter chỉ định, vòng lặp dừng và lưu checkpoint ($0$ = tắt).
-\item Tuỳ chọn ablation \texttt{D1\_RANDOM\_QR=1}: gốc $Q,R$ của teacher lấy ngẫu nhiên log-uniform
-$10^{[-2,2]}$ (cố định theo seed) thay cho Bryson; LQR vẫn dùng Bryson.
+$Q,R$ cuối $+$ RNG) ghi sau \textbf{mỗi iter}; resume tiếp từ iter đã xong. Buffer SAC giữ đủ $(a,r)$ của mọi
+iter nên đường học dựng lại được từ iter 1. Vòng lặp không bắt đầu một iter mới nếu dự báo (lớn nhất của 3 iter
+gần nhất) vượt ngân sách thời gian của job. Mỗi quỹ đạo in một dòng (tỉ lệ status hội tụ / chạm giới hạn vòng
+lặp / không dùng được, thời gian giải lớn nhất và p99 (chỉ để chẩn đoán), số lần đặt lại do phân kỳ, thời gian).
+\item \textbf{Checkpoint mốc} (\texttt{D1\_\allowbreak CKPT\_\allowbreak EVERY\_\allowbreak ITER}, mặc định $1$): lưu bản cố định
+\texttt{checkpoint\_\allowbreak seed<s>\_\allowbreak iter<NNNN>.mat} sau \textbf{mỗi iter} (chỉ SAC/teacher), dùng được làm teacher
+cho DAgger tại bất kỳ iter nào. \textbf{Dừng đúng iter} (\texttt{D1\_STOP\_ITER}): mục tiêu nghiên cứu $100$.
+\item \textbf{Hai chain:} (1) gốc Bryson, seed \texttt{261003001}; (2) gốc ngẫu nhiên (\texttt{D1\_RANDOM\_QR=1}):
+log-uniform $10^{[-2,2]}$ mỗi trọng số, cố định theo seed \texttt{261003101}. LQR luôn dùng Bryson. Cả hai cùng quy
+tắc: hành động không bị chặn, dừng ở iter $100$.
 \end{itemize}
 {\small\itshape Nguồn: Haarnoja et al. (2018), Soft Actor-Critic. Lưu ý: dùng RL để tinh chỉnh trọng số
 MPC cố định có ít tài liệu nền; Bryson chỉ đóng vai KHỞI TẠO cho SAC. Kết quả SAC tốt trên tập train
@@ -505,7 +516,7 @@ trung bình thật trong bước): sai số tương đối trung vị $1.0\%$, s
 $\approx1$ N). Chỉ phần tịnh tiến: khi huấn luyện gió không tạo mô-men.
 
 \subsection{DAgger (Ross, Gordon, Bagnell 2011, Thuật toán 3.1; \texttt{d1\_dagger\_run})}
-Chuyên gia $\pi^*$ = teacher của checkpoint chỉ định với $a=\tanh(\mu)$, \textbf{cố định} suốt DAgger. Biến thể
+Chuyên gia $\pi^*$ = teacher của checkpoint chỉ định với $a=\mu$ (hành động trung bình), \textbf{cố định} suốt DAgger. Biến thể
 không tham số $\beta_1=1$, $\beta_{i\ge2}=0$. Mỗi vòng bay $20$ quỹ đạo rút có hoàn lại từ ngân hàng, gió huấn
 luyện, dòng ngẫu nhiên khởi tạo \texttt{seed}$+9900$:
 \begin{enumerate}[leftmargin=1.6em,itemsep=1pt]
@@ -544,7 +555,7 @@ cho $\alpha$ cố định trên mô hình tuyến tính hoá; không bảo đả
 lệch.
 
 \textbf{Ngân sách} (\texttt{D1\_DAGGER\_ITERS}, mặc định $N_D=10$): $10\times20$ chuyến $\approx1.96\times10^5$
-lần giải teacher. Resume theo từng chuyến bay; mỗi chuyến in một dòng \texttt{DAGGER\_CASE} (ai bay, tỉ lệ nhãn,
+lần giải teacher. 20 chuyến của một vòng chạy song song (gió rút tuần tự trên client); resume theo từng vòng; mỗi chuyến in một dòng \texttt{DAGGER\_CASE} (ai bay, tỉ lệ nhãn,
 thời gian giải, RMSE), mỗi vòng một dòng \texttt{DAGGER\_ITER} ($\lambda$, MSE kiểm định chéo,
 $\rho_{\max}$, RMSE kiểm định).
 
@@ -761,7 +772,7 @@ tỉ lệ status, thời gian giải lớn nhất và p99 (chẩn đoán).
 \item \textbf{Pha DAgger}: mỗi vòng: số nhãn, $\lambda$, MSE kiểm định chéo, $\rho_{\max}$, RMSE kiểm định; ứng
 viên được chọn; $\cL$ --- độ chính xác, tỉ lệ nền co rút; $\cS$ --- số mẫu, trung bình nhãn $s_k$.
 \item \textbf{So sánh} (\texttt{D1\_COMPARE=1}): mỗi họ 1 quỹ đạo của ngân hàng (mức giữa, hoặc khó nhất với
-\texttt{D1\_HARD=1}); 4 bộ trên cùng plant và cùng mẫu gió: LQR, teacher SAC-NMPC ($a=\tanh(\mu)$, biết gió), học
+\texttt{D1\_HARD=1}); 4 bộ trên cùng plant và cùng mẫu gió: LQR, teacher SAC-NMPC ($a=\mu$, biết gió), học
 trò $\alpha=1$, blend. Plant danh nghĩa hoặc \textbf{off-nominal}
 $\theta=\theta_{\mathrm{nom}}\odot(1+s\,\xi\odot\rho_{\mathrm{train}})$, $s=$ \texttt{D1\_PLANT\_PERTURB}.
 \item \textbf{Đánh giá học trò} (\texttt{D1\_SURR\_EVAL=1}): học trò $\alpha=1$ và blend trên 6 quỹ đạo, gió huấn
@@ -786,7 +797,7 @@ $Q_{\mathrm{aug}}=\mathrm{blkdiag}(Q_0,\ I/z_{\mathrm{allow}}^2)$ với $z_{\mat
 $R_0$, giải DARE $\to[K_x,K_I]$, $u=\mathrm{sat}(u_h-K_xe-K_Iz)$, anti-windup kiểu kẹp; \textbf{MPC tuyến tính}
 $N=5$: mô hình $x_{j+1}=A_dx_j+B_d(u_j-u_h)$, chi phí $\sum_{j=1}^{N-1}\norm{x_j-r_{k+j}}_{Q_0}^2+\norm{x_N-r_{k+N}}_{S}^2
 +\sum_{j=0}^{N-1}\norm{u_j-u_h}_{R_0}^2$, chặn hộp đầu vào, QP thu gọn giải bằng active-set KWIK có warm start;
-\textbf{Teacher} của chain (trọng số $a=\tanh(\mu)$, kịch bản theo seed, \texttt{SQP})
+\textbf{Teacher} của chain (trọng số $a=\mu$, kịch bản theo seed, \texttt{SQP})
 được cho biết \emph{đúng} lực gió đo thực tại mỗi bước --- \textbf{cận trên (oracle)}, không triển khai được;
 \textbf{P}: bộ điều khiển đề xuất (\texttt{d1\_blend\_control} với $W^\star$ và tin cậy), \textbf{không} biết gió.
 \item \textbf{Điều kiện.} ``train'': 5 plant LHS mức $\rho_{\mathrm{train}}$ $\times$ 15 quỹ đạo từ ngân
@@ -830,8 +841,10 @@ Sai số bám & $e_k$ & chặn $5$ m; bước phân kỳ $=5$ m\\
 Một lần chấm SAC & -- & 20 quỹ đạo rút có hoàn lại từ 120\\
 Môi trường huấn luyện & -- & plant danh nghĩa $+$ gió ngẫu nhiên, không nhiễu cảm biến\\
 Gió & $U$; gió giật; lực & $\mathcal U[1,10]$ m/s; Dryden $h=20$ ft; rotor drag $0.425,0.256,0$ s$^{-1}$\\
-Checkpoint mốc / dừng & -- & mỗi $50$ iter (chỉ SAC/teacher); \texttt{D1\_STOP\_ITER}\\
-Dải tìm $Q,R$ của SAC & $d$ & $10^{\pm d}$ quanh Bryson, $d=1.5$ mặc định\\
+Checkpoint mốc / dừng & -- & mỗi iter (chỉ SAC/teacher); dừng ở iter $100$\\
+Hành động SAC & $a$ & $\in\mathbb R^6$, $\log_{10}$ hệ số nhân của gốc $Q,R$, không bị chặn\\
+Chain & -- & Bryson (seed 261003001); gốc ngẫu nhiên $10^{[-2,2]}$ (seed 261003101)\\
+Chạy song song & -- & 4 worker cục bộ / iteration (SAC và DAgger); không đổi kết quả\\
 SAC & lr/$\gamma$/batch/buffer & $3{\times}10^{-4}$ / 0 / 256 / $5{\times}10^{4}$; bắt đầu học từ iter 64\\
 Học trò & $W$ & $4\times27$, không bias; $\varphi=[e;\hat F;\bar u_k;\bar u_{k+5}-\bar u_k;\bar u_{k+20}-\bar u_k]$\\
 DAgger & $N_D$, chuyến/vòng & $10$, $20$; $\beta_1=1$, sau đó học trò bay ($\alpha=1$); dòng ngẫu nhiên seed$+9900$\\

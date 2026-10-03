@@ -11,9 +11,8 @@ The public package contains, for method D1 (`docs/D1_method.pdf`):
   ridge fit, stability check, confidences, deployed blend) and the plant/reference
   utilities they call (`configs/step1_plant_config.m`, `quad_dynamics`, `quad_step_rk4`,
   reference generators, `targeted_lqr_weak_config`);
-- the workflows `d1-joint-pipeline.yml`, `d1-final-eval.yml` and the diagnostic
-  `d1-diag-replay.yml` (with `experiments/d1_diag_replay.m`, `tools/ci/d1_set_ftz.c`,
-  `tools/ci/diag_watchdog.sh`, `tools/ci/diag_gdb.py`);
+- the workflows `d1-joint-pipeline.yml` and `d1-final-eval.yml` (the diagnostic replay of
+  the solver hang is in the history at commit `7f60828`);
 - `tools/wind/` (download + conversion of measured wind inside CI jobs),
   `tools/eval/summarize_final_eval.py` and `tools/ci/hang_watchdog.sh`;
 - the method document `docs/D1_method.tex/.pdf` and the design note

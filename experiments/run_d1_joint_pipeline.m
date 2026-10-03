@@ -9,14 +9,16 @@ function run_d1_joint_pipeline()
 % Method document: docs/D1_method.tex. Shared definitions: src/joint/d1_*.m (also used by
 % experiments/d1_final_eval.m).
 %
-% Resumable: the SAC checkpoint holds SAC, counters, the pending iteration (down to the case)
-% and the RNG; the DAgger state file holds the data statistics, candidates, the pending
-% iteration and the RNG. Milestone SAC checkpoints every D1_CKPT_EVERY_ITER iterations.
+% Resumable: the SAC checkpoint (saved after every iteration) holds SAC, counters and the
+% RNG; the DAgger state file (saved after every DAgger iteration) holds the data
+% statistics, candidates and the RNG. Milestone SAC checkpoints every D1_CKPT_EVERY_ITER
+% iterations (1 = every iteration). The flights of one iteration run in parallel on
+% D1_WORKERS local workers (d1_teacher_pool); their winds are drawn by the client in order.
 % All flights use the common flight rules (d1_plant_step, d1_case_len, d1_teacher_step,
 % d1_track_err) and the random training wind (d1_sample_wind).
 %
 % Env: D1_SEED, D1_RUN_DIR, D1_WALL_SECONDS, D1_RESUME ('1' to resume), D1_STOP_ITER,
-% D1_CKPT_EVERY_ITER, D1_WIND, D1_SOLVER, D1_RANDOM_QR, D1_LOGMULT_DEC, D1_CKPT_SUFFIX, ...
+% D1_CKPT_EVERY_ITER, D1_WIND, D1_SOLVER, D1_RANDOM_QR, D1_WORKERS, D1_CKPT_SUFFIX, ...
 % Modes: D1_DAGGER, D1_DIAG, D1_SURR_EVAL, D1_CONSOLIDATE, D1_COMPARE, D1_GATE_GRID.
 % FROZEN: Np=20, Nc=5, Ts=0.05, H=20, dU=0 (asserted; cfg.Qf is an unused flag, the
 % teacher terminal weight is the fixed Bryson Q0/M).
@@ -63,7 +65,7 @@ if strcmp(d1_getenv_str('D1_DAGGER','0'), '1')
     % learn the linear student from the frozen teacher of sacPath (resumable)
     assert(isfile(sacPath), 'DAgger requires the SAC checkpoint %s', sacPath);
     S = load(sacPath);
-    d1_dagger_run(cfg, teacher, lqr, cases, S, dagPath, stuPath); return;
+    d1_dagger_run(cfg, teacher, scen, lqr, cases, S, dagPath, stuPath); return;
 end
 if strcmp(d1_getenv_str('D1_CONSOLIDATE','0'), '1')
     % recompute the confidences of an existing student (teacher-free)
@@ -89,65 +91,64 @@ end
 if cfg.resume && isfile(ckptPath)
     S = load(ckptPath); sac = S.sac; st = S.st;
     rng(S.rngState);
-    fprintf('RESUMED from %s at iter=%d (pending case %d)\n', ckptPath, st.iter, pending_case(st));
+    fprintf('RESUMED from %s at iter=%d\n', ckptPath, st.iter);
 else
     sac = init_sac(cfg);
     st = struct('iter', 0, 'lastReward', NaN, 'pend', []);
     fprintf('FRESH start\n');
 end
 
-% ---- open-ended SAC loop (resumable after every case) -------------------------
-% One SAC iteration = casesPerEval paired rollouts with one sampled Q,R. The partly
-% done iteration (action, case indices, rewards so far) lives in st.pend and is saved
-% with the checkpoint, so an iteration longer than one CI job continues in the next
-% job with the identical random stream (RNG state is part of the checkpoint).
-tStart = tic; lastCkpt = tic; caseDur = [];
+% ---- open-ended SAC loop (checkpoint after every iteration) ---------------------
+% One SAC iteration = casesPerEval paired rollouts with one sampled Q,R. The client draws
+% the action, the case indices and the wind of every case IN ORDER from the global random
+% stream, then the rollouts run in parallel on local workers (d1_teacher_pool); results
+% are gathered in case order. The checkpoint (SAC, counters, RNG) is saved after every
+% iteration; an iteration predicted to overrun the wall budget is not started.
+[nW, teacherC] = d1_teacher_pool(cfg, scen, teacher);
+tStart = tic; iterDur = [];
 wallReserve = 120;                                   % s kept for the final save
 if ~isfield(st, 'pend'), st.pend = []; end
-stopRun = false;
-while ~stopRun
+while true
     if isempty(st.pend)
-        % Optional hard stop at an exact SAC iteration (D1_STOP_ITER); 0 = no stop.
         if cfg.stopIter > 0 && st.iter >= cfg.stopIter
             fprintf('STOP_ITER reached iter=%d (target %d)\n', st.iter, cfg.stopIter);
             break;
         end
+        if ~isempty(iterDur) && toc(tStart) + max(iterDur(max(1,end-2):end)) + wallReserve > cfg.wallSeconds
+            fprintf('WALL_STOP elapsed=%.0fs next-iteration est=%.0fs (wall=%ds) iter=%d\n', ...
+                toc(tStart), max(iterDur(max(1,end-2):end)), cfg.wallSeconds, st.iter);
+            break;
+        end
         st.iter = st.iter + 1;
-        a = sac_sample_action(sac, cfg);               % candidate in [-1,1]^6
+        a = sac_sample_action(sac, cfg);               % candidate in R^6 (log10 multipliers)
         idx = randi(numel(cases), 1, cfg.casesPerEval);
-        st.pend = struct('a', a, 'idx', idx, 'rewards', zeros(cfg.casesPerEval, 1), ...
-            'usable', zeros(cfg.casesPerEval, 1), 'cL', zeros(0,1), 'c', 1, 'dur', 0);
+        ds = cell(cfg.casesPerEval, 1);                % wind of every case, drawn in order
+        for cc = 1:cfg.casesPerEval
+            if cfg.windOn, ds{cc} = d1_sample_wind(cfg, d1_case_len(cases(idx(cc)).Xref, cfg)); end
+        end
+        st.pend = struct('a', a, 'idx', idx, 'ds', {ds});
     end
     [Q, R] = d1_action_to_QR(st.pend.a, cfg);
-    d1_set_teacher_weights(teacher, Q, R, cfg);
-    % --- remaining rollouts of this iteration (paired NMPC + LQR) ----------------
-    while st.pend.c <= cfg.casesPerEval
-        % Do not START a case predicted to overrun the wall budget (the CI step timeout
-        % would kill the job before the final checkpoint). Estimate = max of last 5 cases.
-        if ~isempty(caseDur) && toc(tStart) + max(caseDur(max(1,end-4):end)) + wallReserve > cfg.wallSeconds
-            fprintf('WALL_STOP elapsed=%.0fs next-case est=%.0fs (wall=%ds) iter=%d case=%d\n', ...
-                toc(tStart), max(caseDur(max(1,end-4):end)), cfg.wallSeconds, st.iter, st.pend.c);
-            stopRun = true; break;
-        end
-        tCase = tic; c = st.pend.c;
-        [rew, use, cLdata] = paired_rollout(teacher, lqr, cases(st.pend.idx(c)), cfg);
-        st.pend.rewards(c) = rew; st.pend.usable(c) = use; st.pend.cL = [st.pend.cL; cLdata];
-        st.pend.c = c + 1; caseDur(end+1) = toc(tCase); st.pend.dur = st.pend.dur + caseDur(end); %#ok<AGROW>
-        if toc(lastCkpt) > cfg.checkpointEverySec
-            save_checkpoint(ckptPath, sac, st); lastCkpt = tic;
-        end
+    % --- the casesPerEval paired rollouts of this iteration, in parallel ----------
+    tIter = tic; n = cfg.casesPerEval;
+    rewards = zeros(n, 1); usable = zeros(n, 1); cL = cell(n, 1);
+    kases = cases(st.pend.idx); ds = st.pend.ds;
+    parfor (c = 1:n, nW)
+        tch = teacherC.Value;                          %#ok<PFBNS> pool Constant: one solver per worker
+        d1_set_teacher_weights(tch, Q, R, cfg);
+        [rewards(c), usable(c), cL{c}] = paired_rollout(tch, lqr, kases(c), ds{c}, cfg);
     end
-    if stopRun, break; end
+    iterDur(end+1) = toc(tIter); %#ok<AGROW>
     % --- iteration complete: SAC update -------------------------------------------
-    reward = mean(st.pend.rewards);
+    reward = mean(rewards);
     sac = sac_update(sac, st.pend.a, reward, cfg);     % 1-step bandit SAC
     st.lastReward = reward; st.lastQ = diag(Q).'; st.lastR = diag(R).';
-    st.cL = st.pend.cL; iterTime = st.pend.dur; useMean = mean(st.pend.usable); st.pend = [];
+    st.cL = vertcat(cL{:}); st.pend = [];
     if mod(st.iter, cfg.logEvery)==0
         fprintf('iter=%d reward=%.4f alpha=%.3g usable=%.3f elapsed=%.0fs iter_time=%.0fs\n', ...
-            st.iter, reward, sac.alpha, useMean, toc(tStart), iterTime);
+            st.iter, reward, sac.alpha, mean(usable), toc(tStart), iterDur(end));
     end
-    save_checkpoint(ckptPath, sac, st); lastCkpt = tic;
+    save_checkpoint(ckptPath, sac, st);
     if cfg.ckptEvery > 0 && mod(st.iter, cfg.ckptEvery) == 0
         p = fullfile(cfg.runDir, sprintf('checkpoint_seed%d_iter%04d.mat', cfg.seed, st.iter));
         save_checkpoint(p, sac, st);
@@ -155,8 +156,7 @@ while ~stopRun
     end
 end
 save_checkpoint(ckptPath, sac, st);
-fprintf('D1_JOINT_DONE iters=%d pending_case=%d last_reward=%.4f\n', ...
-    st.iter, pending_case(st), st.lastReward);
+fprintf('D1_JOINT_DONE iters=%d last_reward=%.4f\n', st.iter, st.lastReward);
 end
 
 % ============================================================================
@@ -179,9 +179,9 @@ theta.alphaTau = nom.alphaTau(:) .* f(12:14);
 end
 
 % ---- paired NMPC + LQR rollout on one case (SAC reward) -----------------------
-function [reward, useShare, cLdata] = paired_rollout(teacher, lqr, kase, cfg)
+function [reward, useShare, cLdata] = paired_rollout(teacher, lqr, kase, ds, cfg)
 % Teacher copy and LQR copy of the nominal plant fly the same reference in the same wind
-% realization. The teacher is told the current wind force (privileged). The reward is
+% realization ds (drawn by the client in case order; [] = no wind). The teacher is told the current wind force (privileged). The reward is
 % computed from the teacher's KPIs over the full case; the LQR copy only provides the
 % contraction diagnostics g_H.
 Ts = cfg.Ts; theta = cfg.plant.nominal; uh = cfg.uh;
@@ -193,7 +193,6 @@ tsol = zeros(1,T);
 nDivN = 0; nDivL = 0;                                % divergence restarts (teacher copy / LQR copy)
 EL = zeros(12, T+1); EL(:,1) = xL - Xref(:,1);       % LQR error traj for g_H
 d1_teacher_reset(teacher, Xref, 1, cfg);             % clean solver memory for EVERY case
-if cfg.windOn, ds = d1_sample_wind(cfg, T); else, ds = []; end   % same wind for both copies
 
 for k = 1:T
     t = (k-1)*Ts;
@@ -269,7 +268,7 @@ end
 
 function a = sac_sample_action(sac, ~)
 mu = extractdata(sac.mu); std = exp(extractdata(sac.logStd));
-a = tanh(mu + std.*randn(size(mu)));
+a = mu + std.*randn(size(mu));                     % unbounded (log10 multipliers)
 end
 
 function sac = sac_update(sac, a, r, cfg)
@@ -286,7 +285,7 @@ sac.step = sac.step + 1;
 [g1, g2] = dlfeval(@critic_loss, sac.q1, sac.q2, Ab, Rb);
 [sac.q1, sac.avg1, sac.avgSq1] = adamupdate(sac.q1, g1, sac.avg1, sac.avgSq1, sac.step, cfg.sacLR);
 [sac.q2, sac.avg2, sac.avgSq2] = adamupdate(sac.q2, g2, sac.avg2, sac.avgSq2, sac.step, cfg.sacLR);
-% actor + alpha update (state-independent squashed Gaussian)
+% actor + alpha update (state-independent Gaussian, unbounded action)
 [gmu, gstd, gAl] = dlfeval(@actor_loss, sac.mu, sac.logStd, ...
     sac.logAlpha, sac.q1, sac.q2, cfg.actionDim, cfg.sacTargetEntropy);
 [sac.mu, sac.avgA, sac.avgSqA] = adamupdate(sac.mu, gmu, sac.avgA, sac.avgSqA, sac.step, cfg.sacLR);
@@ -306,11 +305,9 @@ end
 function [gmu, gstd, gAl, ent] = actor_loss(mu, logStd, logAlpha, q1, q2, d, targetEnt)
 eps = randn(d,1);
 std = exp(logStd);
-preTanh = mu + std.*eps;
-a = tanh(preTanh);
-% log prob of squashed gaussian
-logp = sum(-0.5*((preTanh-mu)./std).^2 - logStd - 0.5*log(2*pi)) ...
-       - sum(log(1 - a.^2 + 1e-6));
+a = mu + std.*eps;                                   % unbounded action (no tanh)
+% log prob of the diagonal Gaussian
+logp = sum(-0.5*((a-mu)./std).^2 - logStd - 0.5*log(2*pi));
 alpha = exp(logAlpha);
 Ab = dlarray(a, 'CB');
 qmin = min(forward(q1, Ab), forward(q2, Ab));
@@ -328,10 +325,6 @@ save(path, 'sac', 'st', 'rngState', '-v7.3');
 fprintf('CHECKPOINT saved iter=%d -> %s\n', st.iter, path);
 end
 
-function c = pending_case(st)
-% next case index of a partly done SAC iteration (0 = none pending)
-if isfield(st, 'pend') && ~isempty(st.pend), c = st.pend.c; else, c = 0; end
-end
 
 % ---- diagnostics ------------------------------------------------------------
 function diag_flight(cfg, teacher, lqr, cases)
@@ -432,13 +425,13 @@ function compare_flight(cfg, teacher, lqr, cases, stu, sac, conf)
 % One representative case per trajectory FAMILY; fly all controllers on the SAME
 % reference, plant and wind realization and dump full trajectories + tracking error:
 %   (a) LQR-only        u = sat(uh - K e)
-%   (b) teacher NMPC    SAC-NMPC (deterministic SAC policy a = tanh(mu)), privileged wind
+%   (b) teacher NMPC    SAC-NMPC (deterministic SAC policy a = mu), privileged wind
 %   (c) student alpha=1 u = sat(sat(u_LQR) + W*phi)
 %   (d) proposed blend  d1_blend_control (alpha = c_S * g_L(c_LQR))
 sel = family_cases(cases);
-aMean = tanh(extractdata(sac.mu));
+aMean = extractdata(sac.mu);
 [Qt, Rt] = d1_action_to_QR(aMean, cfg); d1_set_teacher_weights(teacher, Qt, Rt, cfg);
-fprintf('COMPARE teacher weights = SAC-NMPC (a=tanh(mu)); diag(Q)=[%s]\n', ...
+fprintf('COMPARE teacher weights = SAC-NMPC (a=mu); diag(Q)=[%s]\n', ...
     strtrim(sprintf('%.3g ', diag(Qt))));
 pscale = d1_getenv_num('D1_PLANT_PERTURB', 0);
 theta = perturb_plant(cfg.plant.nominal, pscale, cfg.seed);

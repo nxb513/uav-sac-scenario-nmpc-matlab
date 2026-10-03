@@ -11,8 +11,9 @@ is documented in `docs/D1_method.pdf`.
 | `d1_joint_plant_params`, `d1_bryson_weights` | nominal plant parameters, Bryson Q0, R0 |
 | `d1_build_lqr` | Bryson LQR on the nominal hover linearization (K, Riccati P) |
 | `d1_train_cases` | the 120-case training reference bank (with flat feed-forward Uref) |
-| `d1_sample_scenarios`, `d1_teacher_build_solver` | teacher model scenarios; acados scenario NMPC with the wind-force parameter (budget: 50 SQP / 100 QP iterations) |
-| `d1_action_to_QR`, `d1_set_teacher_weights` | SAC action to teacher Q, R |
+| `d1_sample_scenarios`, `d1_teacher_build_solver` | teacher model scenarios; acados scenario NMPC with the wind-force parameter (budget: 50 SQP / 100 QP iterations); `reuse` loads the client's generated code on a worker |
+| `d1_teacher_pool` | local parallel workers, each with its own teacher solver, for the flights of one SAC / DAgger iteration |
+| `d1_action_to_QR`, `d1_set_teacher_weights` | SAC action (unbounded, log10 multipliers of the base) to teacher Q, R |
 | `d1_teacher_target` | wind-consistent flat reference of the teacher |
 | `d1_teacher_step`, `d1_teacher_reset` | one teacher step (usable rule, solve time), solver reset |
 | `d1_wind_now` | the current wind force (the teacher's privileged information) |

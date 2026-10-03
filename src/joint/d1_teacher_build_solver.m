@@ -1,4 +1,4 @@
-function solver = d1_teacher_build_solver(cfg, thetaScenarios)
+function solver = d1_teacher_build_solver(cfg, thetaScenarios, reuse)
 %D1_TEACHER_BUILD_SOLVER Robust scenario NMPC teacher (M=5, Nc=5) via acados.
 %
 % FROZEN spec realized here:
@@ -17,6 +17,10 @@ function solver = d1_teacher_build_solver(cfg, thetaScenarios)
 %
 % thetaScenarios: 1xM struct array, each field: m, Jd(3), Dv(3), Domega(3),
 %   alphaT, alphaTau(3). Baked into the model at build (fixed per seed).
+%
+% reuse = true (parallel workers, d1_teacher_pool): load the code that the client already
+% generated and compiled in cfg.codegenDir (same OCP, same seed) without generating or
+% compiling anything, so concurrent workers never write the same files.
 
 check_acados_requirements();
 import casadi.*
@@ -116,7 +120,14 @@ ocp.solver_options.hessian_approx = 'GAUSS_NEWTON';
 ocp.solver_options.levenberg_marquardt = 1e-3;   % regularize -> avoid QP NaN
 ocp.solver_options.qp_solver_iter_max = 100;
 
-solver = AcadosOcpSolver(ocp);
+if nargin < 3, reuse = false; end
+ocp.code_gen_options.code_export_directory = cfg.codegenDir;
+opts = struct('output_dir', fullfile(fileparts(cfg.codegenDir), 'build'));
+if reuse
+    opts.generate = false; opts.build = false; opts.compile_mex_wrapper = false;
+    opts.compile_interface = false; opts.check_reuse_possible = false;
+end
+solver = AcadosOcpSolver(ocp, opts);
 
 % Nc move-blocking: du = 0 for stages Nc..N-1
 for s = Nc:N-1

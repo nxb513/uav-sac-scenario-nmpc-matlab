@@ -1,9 +1,10 @@
-name: D1 joint pipeline (5 seeds)
+name: D1 joint pipeline
 
 # ONE task per seed. SAC phase: SAC tunes the NMPC Q,R of the acados teacher (privileged
 # wind) on paired teacher/LQR rollouts -> checkpoint. DAgger phase (dagger=1): frozen
 # teacher -> linear student by DAgger -> c_S / c_LQR -> student file. Open-ended (runs
-# until wall_seconds or stop_iter, checkpoints, resume to continue).
+# until wall_seconds or stop_iter, checkpoint after every iteration, resume to continue).
+# The flights of one iteration run in parallel on `workers` local MATLAB workers.
 # Code: experiments/run_d1_joint_pipeline.m + src/joint/d1_*.m;
 # method: docs/D1_method.pdf.
 
@@ -53,7 +54,7 @@ on:
       seeds:
         description: JSON array of seeds to run (1 or more)
         required: false
-        default: "[260914001, 260914002, 260914003, 260914004, 260914005]"
+        default: "[261003001]"
         type: string
       solver:
         description: "NMPC solver: SQP (used by every run) or SQP_RTI"
@@ -90,13 +91,8 @@ on:
         required: false
         default: "0"
         type: string
-      logmult_dec:
-        description: "SAC Q,R search half-width in decades (1.5=wide default; 0.5=tight, near Bryson)"
-        required: false
-        default: "1.5"
-        type: string
       stop_iter:
-        description: "Stop exactly at this SAC iteration, then checkpoint + consolidate (0 = off)"
+        description: "Stop exactly at this SAC iteration (0 = off)"
         required: false
         default: "0"
         type: string
@@ -106,9 +102,14 @@ on:
         default: "1"
         type: string
       ckpt_every:
-        description: "Save a frozen milestone SAC checkpoint every N SAC iterations (0 = off)"
+        description: "Save a frozen milestone SAC checkpoint every N SAC iterations (1 = every iteration; 0 = off)"
         required: false
-        default: "50"
+        default: "1"
+        type: string
+      workers:
+        description: "Local parallel workers for the flights of one SAC / DAgger iteration (0 = serial)"
+        required: false
+        default: "4"
         type: string
       dagger:
         description: "1 = DAgger phase: learn the linear student from the frozen teacher of the checkpoint in resume_run_id"
@@ -116,7 +117,7 @@ on:
         default: "0"
         type: string
       ckpt_suffix:
-        description: "Which SAC checkpoint DAgger/modes use: empty = checkpoint_seed<s>.mat, _iter0500 = milestone"
+        description: "Which SAC checkpoint DAgger/modes use: empty = checkpoint_seed<s>.mat, _iter0100 = milestone"
         required: false
         default: ""
         type: string
@@ -145,10 +146,10 @@ jobs:
       D1_C_LOW: ${{ inputs.c_low }}
       D1_C_HIGH: ${{ inputs.c_high }}
       D1_RANDOM_QR: ${{ inputs.random_qr }}
-      D1_LOGMULT_DEC: ${{ inputs.logmult_dec }}
       D1_STOP_ITER: ${{ inputs.stop_iter }}
       D1_WIND: ${{ inputs.wind }}
       D1_CKPT_EVERY_ITER: ${{ inputs.ckpt_every }}
+      D1_WORKERS: ${{ inputs.workers }}
       D1_DAGGER: ${{ inputs.dagger }}
       D1_CKPT_SUFFIX: ${{ inputs.ckpt_suffix }}
       D1_SOLVER: ${{ inputs.solver }}
@@ -216,6 +217,7 @@ jobs:
             Optimization_Toolbox
             Control_System_Toolbox
             Statistics_and_Machine_Learning_Toolbox
+            Parallel_Computing_Toolbox
           cache: true
 
       - name: Start hang watchdog (diagnostics only)

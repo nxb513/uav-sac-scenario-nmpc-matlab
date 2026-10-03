@@ -15,7 +15,9 @@ the linear student + DAgger; it is now implemented and merged into `docs/D1_meth
   order as the LQR (108 multiply-adds for `W*phi`, 48 for the LQR).
 - **Teacher (training only, and oracle in evaluation):** SAC-tuned scenario NMPC
   (acados, M = 5 model scenarios, N = 20, Nc = 5, SQP with at most 50 SQP and 100 QP
-  iterations per solve). It is told the
+  iterations per solve). SAC's action is the log10 of six multipliers of the base Q, R
+  (Bryson, or a random base), unbounded (no search-range parameter); one SAC iteration
+  scores one sampled Q, R on 20 training flights. It is told the
   exact current wind force (privileged information, simulation only), which enters its
   prediction model and a wind-consistent flat reference. It is not deployable.
 - **Linear student:** `Du = W*phi`, `W` is 4 x 27, no bias. `phi` holds the state error
@@ -47,8 +49,12 @@ the linear student + DAgger; it is now implemented and merged into `docs/D1_meth
 | `src/joint/d1_teacher_build_solver.m` | acados scenario-NMPC teacher with the wind-force parameter |
 | `tools/wind/` | Download and convert measured wind (validation only, inside CI jobs) |
 | `tools/eval/summarize_final_eval.py` | Markdown summary of the final-evaluation CSVs |
+| `src/joint/d1_teacher_pool.m` | Local parallel workers for the flights of one SAC / DAgger iteration |
 | `tools/ci/hang_watchdog.sh` | Diagnostic watchdog of the training step |
-| `experiments/d1_diag_replay.m`, `.github/workflows/d1-diag-replay.yml`, `tools/ci/d1_set_ftz.c`, `tools/ci/diag_watchdog.sh`, `tools/ci/diag_gdb.py` | Diagnostic replay of a hung case with stall snapshots (not part of the method) |
+
+The diagnostic replay used to find the solver hang (`experiments/d1_diag_replay.m`,
+`d1-diag-replay.yml`, `tools/ci/d1_set_ftz.c`, `diag_watchdog.sh`, `diag_gdb.py`) is kept
+in the history at commit `7f60828`; it reads only the earlier checkpoint format.
 
 All other scripts in `experiments/` belong to earlier stages and are not part of the current
 pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `select_d1_teacher`,
@@ -67,14 +73,21 @@ pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `selec
 ## GitHub workflows
 
 - **D1 joint pipeline** (`.github/workflows/d1-joint-pipeline.yml`).
-  - **SAC phase** (default). Main inputs: `seeds`, `random_qr`, `logmult_dec`,
-    `wall_seconds`, `stop_iter`, `ckpt_every`, `wind`, `solver`, and `resume_run_id`
-    (empty means a fresh start).
+  - **SAC phase** (default). Main inputs: `seeds`, `random_qr`, `wall_seconds`,
+    `stop_iter`, `ckpt_every`, `workers`, `wind`, `solver`, and `resume_run_id` (empty
+    means a fresh start). The 20 flights of an iteration run in parallel on `workers`
+    (default 4) local MATLAB workers; their winds are drawn in order by the client, so the
+    results do not depend on the number of workers.
+  - **Research setup (2026-10-03):** two chains, `stop_iter=100`, `ckpt_every=1`:
+    Bryson base (seed 261003001, `random_qr=0`) and random base (seed 261003101,
+    `random_qr=1`).
   - **Artifact per seed:** `d1-joint-ckpt-seed<seed>-<run_id>`. It holds
-    `checkpoint_seed<s>.mat` and the milestone copies `checkpoint_seed<s>_iter<NNNN>.mat`
-    every 50 iterations.
+    `checkpoint_seed<s>.mat` (saved after every iteration) and the milestone copies
+    `checkpoint_seed<s>_iter<NNNN>.mat` (every iteration with `ckpt_every=1`). The SAC
+    buffer in the checkpoint holds (action, reward) of every iteration, so the learning
+    curve can be rebuilt from iteration 1.
   - **DAgger phase:** `dagger=1` with `resume_run_id` set to the run that holds the SAC
-    checkpoint, and `ckpt_suffix` (for example `_iter0500`). It writes
+    checkpoint, and `ckpt_suffix` (for example `_iter0100`). It writes
     `student_seed<s><suffix>.mat`, the deployed controller, and the resumable
     `dagger_seed<s><suffix>.mat`. To continue an unfinished DAgger, run it again with
     `resume_run_id` set to the previous DAgger run.
@@ -82,7 +95,7 @@ pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `selec
     `hard`, `plant_perturb`), `consolidate`. The gate-grid mode (`D1_GATE_GRID=1`) exists
     in the code but has no workflow input.
 - **D1 final evaluation** (`.github/workflows/d1-final-eval.yml`).
-  - **Inputs:** `chains` (JSON list of `{seed, rqr, dec, run, suffix}`, where `run` is the
+  - **Inputs:** `chains` (JSON list of `{seed, rqr, run, suffix}`, where `run` is the
     DAgger run, whose artifact holds both the SAC checkpoint and the student file), `conds`
     (`train`, `ood`), `chain_ctrls` (`Teacher,P`) and `base_ctrls` (`LQR,LQI,MPC`).
   - **Outputs:** CSVs, representative trajectories and a Markdown summary.
@@ -95,8 +108,9 @@ multi-hour "hangs"); see the known-issue note in `docs/D1_method.pdf`. A resume 
 checkpoint cannot be downloaded; it never silently restarts a chain.
 
 A diagnostic watchdog (`tools/ci/hang_watchdog.sh`) watches the training step. If no file is
-written for 60 minutes, it saves the stacks of the MATLAB process (`hang_backtrace_*.txt` in
-the artifact) and stops the step, so the last checkpoint is uploaded. It never changes the
+written for 60 minutes, it saves the stacks of every MATLAB process, client and workers
+(`hang_backtrace_*.txt` in the artifact), and stops the step, so the last checkpoint is
+uploaded. It never changes the
 training itself.
 
 Other `matlab-*.yml` workflows belong to the legacy pipeline.

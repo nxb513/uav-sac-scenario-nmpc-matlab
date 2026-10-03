@@ -9,7 +9,7 @@ function d1_final_eval()
 %   MPC      standard linear MPC, N = D1_MPC_N (5): hover-linear model, Bryson Q,R,
 %            terminal DARE P, input box constraints, KWIK active-set QP (warm start)
 %   Teacher  SAC-NMPC teacher of the chain (ORACLE): scenario NMPC (acados, M=5 scenarios
-%            from the chain seed, N=20, Nc=5, D1_SOLVER) with Q,R = d1_action_to_QR(tanh(mu)),
+%            from the chain seed, N=20, Nc=5, D1_SOLVER) with Q,R = d1_action_to_QR(mu),
 %            told the exact current wind force (privileged, not deployable) -- d1_teacher_step
 %   P        proposed controller (deployed): d1_blend_control on the LQR base with the
 %            chain's DAgger student Du = W*phi and its confidences (student file); it does
@@ -24,8 +24,8 @@ function d1_final_eval()
 %   ood   : OOD plants (LHS 5) x 10 OOD references (5 families x {14, 16 m/s}, a = 9)
 % Each (reference, plant) pair is flown with 2 real-wind series, cycled over all series
 % in D1_WIND_DIR (tools/wind/prepare_wind_series.py): train 150, ood 100 flights.
-% The chain (seed, random QR base, SAC width) comes from D1_SEED / D1_RANDOM_QR /
-% D1_LOGMULT_DEC exactly as in training; D1_CKPT is its SAC checkpoint (teacher) and
+% The chain (seed, random QR base) comes from D1_SEED / D1_RANDOM_QR exactly as in
+% training; D1_CKPT is its SAC checkpoint (teacher) and
 % D1_STUDENT its student file student_seed<s><suffix>.mat (required for P).
 %
 % Outputs (D1_OUT): final_eval_<cond>_<tag>_<k>of<K>.csv (one row per flight x ctrl)
@@ -53,7 +53,7 @@ if any(strcmp(ctrls, 'P'))
 end
 if any(strcmp(ctrls, 'Teacher'))
     teacher = d1_teacher_build_solver(cfg, scen);
-    aMean = tanh(extractdata(S.sac.mu));
+    aMean = extractdata(S.sac.mu);                 % deterministic SAC action (mean)
     [Qt, Rt] = d1_action_to_QR(aMean, cfg); d1_set_teacher_weights(teacher, Qt, Rt, cfg);
     fprintf('TEACHER solver=%s diag(Q)=[%s] diag(R)=[%s]\n', cfg.solverType, ...
         num2str(diag(Qt).', '%.3g '), num2str(diag(Rt).', '%.3g '));
