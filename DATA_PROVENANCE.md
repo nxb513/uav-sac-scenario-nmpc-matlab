@@ -7,8 +7,11 @@ the 120-case reference bank (`d1_train_cases`, one seed per case name), the teac
 M = 5 model scenarios (first draw after `rng(seed)`), and, from the run's random stream
 (saved in every checkpoint), the case draws, the synthetic training wind of every flight
 (`d1_sample_wind`: mean 1-10 m/s, Dryden low-altitude gusts, linear rotor drag) and the
-SAC exploration. These draws are made by the client in flight order before the flights of
-an iteration run in parallel, so the data do not depend on the number of workers. The DAgger phase draws its cases and winds from `rng(seed + 9900)` (state
+SAC exploration. The bank build reseeds the global stream per case and does not restore
+it, so these SAC-phase draws are the same for every chain (the seed sets only the model
+scenarios and the random Q,R base). These draws are made by the client in flight order
+before the flights of an iteration run in parallel, so the data do not depend on the
+number of workers. The DAgger phase draws its cases and winds from `rng(seed + 9900)` (state
 saved in the DAgger state file); its 15 validation flights draw their winds from a dedicated
 `RandStream(seed + 7700)`. No measured wind data are used in training.
 

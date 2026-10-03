@@ -1,6 +1,9 @@
 function cases = d1_train_cases(cfg)
 %D1_TRAIN_CASES The training reference bank: deterministic stratified sweep
 % family x acceleration x speed (5 x 3 x 8) until 120 cases, nominal flat references.
+% NOTE: every case reseeds the GLOBAL random stream (rng(d1_case_seed(gid))) and the stream
+% is not restored, so all later SAC-phase draws (network init, exploration, case indices,
+% winds, minibatches) are the same for every chain seed (paired chains; docs/D1_method Sec 2).
 ref = targeted_lqr_weak_config().reference;
 theta = cfg.plant.nominal;
 families = ref.families; speeds = ref.approvedIdSpeedAnchors;
