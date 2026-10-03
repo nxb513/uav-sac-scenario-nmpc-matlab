@@ -17,7 +17,9 @@ p = gcp('nocreate');
 if isempty(p)
     env = {'ACADOS_INSTALL_DIR', 'ACADOS_SOURCE_DIR', 'LD_LIBRARY_PATH', 'CASADI_DIR', 'ENV_RUN'};
     env = env(~cellfun(@(v) isempty(getenv(v)), env));
-    p = parpool('Processes', cfg.nWorkers, 'IdleTimeout', Inf, 'EnvironmentVariables', env);
+    % the default profile allows one worker per PHYSICAL core; the CI runner has 4 vCPUs
+    clu = parcluster('Processes'); clu.NumWorkers = max(clu.NumWorkers, cfg.nWorkers);
+    p = parpool(clu, cfg.nWorkers, 'IdleTimeout', Inf, 'EnvironmentVariables', env);
 end
 nW = p.NumWorkers;
 teacherC = parallel.pool.Constant(@() d1_teacher_build_solver(cfg, scen, true));
