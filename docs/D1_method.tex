@@ -63,7 +63,7 @@ chưng cất bằng DAgger từ NMPC-scenario, với tin cậy $\cS$ và $\cL$\p
 \begin{minipage}{0.85\textwidth}\centering
 Bản ghi rõ: mô hình, tham số danh nghĩa, điều kiện bất định và nhiễu, tập quỹ đạo (họ, tốc độ,
 gia tốc), thiết kế LQR (Bryson), teacher NMPC-scenario $M{=}5$ được biết gió (thông tin đặc quyền), SAC
-tinh chỉnh $Q,R$ khởi tạo Bryson, học trò tuyến tính có chi phí ngang LQR học bằng DAgger, định nghĩa
+tinh chỉnh $Q,R$ không giới hạn phạm vi (gốc Bryson; chain đối chứng gốc ngẫu nhiên), học trò tuyến tính có chi phí ngang LQR học bằng DAgger, định nghĩa
 $\cS/\cL$, bộ điều khiển đề xuất (trộn theo tin cậy), phân tích co rút Lyapunov (điều kiện đủ), môi trường
 huấn luyện có gió ngẫu nhiên, và giao thức đánh giá. Mọi mô tả khớp với mã nguồn hiện tại: các định nghĩa
 dùng chung nằm trong \texttt{src/joint/d1\_*.m}, được cả pipeline huấn luyện
@@ -85,7 +85,8 @@ ba thành phần và một luật hợp nhất:
 \item \textbf{LQR nền} — thiết kế theo phương pháp chuẩn (tuyến tính hoá quanh hover + Riccati rời rạc),
 trọng số theo \textbf{quy tắc Bryson}. Cho ma trận Lyapunov $P$ và bộ điều khiển ổn định vùng.
 \item \textbf{Teacher = NMPC-scenario ($M{=}5$)} — bộ NMPC bền vững chạy ngoại tuyến. \textbf{SAC} tinh chỉnh
-trọng số $Q,R$ của NMPC, \textbf{khởi tạo từ Bryson}. Teacher được \textbf{biết lực gió hiện tại} (thông tin
+trọng số $Q,R$ của NMPC, \textbf{khởi tạo từ Bryson} (chain đối chứng: gốc ngẫu nhiên), không giới hạn phạm vi
+tìm, dừng ở iter 100 (Mục 8). Teacher được \textbf{biết lực gió hiện tại} (thông tin
 đặc quyền, chỉ có trong mô phỏng): lực này vào mô hình dự báo và vào tham chiếu nhất quán với gió (Mục 7).
 Teacher không được triển khai.
 \item \textbf{Học trò tuyến tính} — $\Delta u=W\varphi$ với 27 đặc trưng rẻ $\varphi$ (sai số trạng thái, lực ngoài
