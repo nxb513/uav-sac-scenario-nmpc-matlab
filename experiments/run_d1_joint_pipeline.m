@@ -276,7 +276,7 @@ function sac = sac_update(sac, a, r, cfg)
 sac.buf.pos = mod(sac.buf.pos, sac.cap) + 1;
 sac.buf.a(:,sac.buf.pos) = a(:); sac.buf.r(sac.buf.pos) = r;
 sac.buf.n = min(sac.buf.n+1, sac.cap);
-if sac.buf.n < min(64, cfg.sacBatch), return; end
+if sac.buf.n < cfg.sacWarmup, return; end              % warm-up: no update before cfg.sacWarmup samples
 k = min(cfg.sacBatch, sac.buf.n);
 idx = randi(sac.buf.n, 1, k);
 Ab = dlarray(sac.buf.a(:,idx), 'CB'); Rb = dlarray(sac.buf.r(idx), 'CB');

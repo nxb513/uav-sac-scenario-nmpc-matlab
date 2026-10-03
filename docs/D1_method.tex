@@ -438,7 +438,7 @@ solver và được xử lý theo quy tắc ``không dùng được'' sẵn có.
 thời gian (bản thử giới hạn 2 s đã bị gỡ).
 \item \emph{Hệ quả:} mọi chain huấn luyện trên \texttt{3edf443} bị thay thế. Sau đó (2026-10-03) thiết kế huấn luyện được
 chốt lại: 2 chain (Bryson, ngẫu nhiên), hành động SAC không bị chặn, chạy song song, checkpoint mỗi iter, dừng ở
-iter 100 (sau đó nâng lên 200, đánh giá ở các mốc 100, 150, 200); chạy từ đầu trên v0.6.0.
+iter 100 (sau đó nâng lên 200, đánh giá ở các mốc 100, 150, 200), ngưỡng khởi động SAC $10$; chạy từ đầu trên v0.6.0.
 \item \emph{Công cụ CI (không thuộc phương pháp):} ghim acados v0.6.0; resume bắt buộc có checkpoint; watchdog dừng bước
 train sau 60 phút không có file mới để checkpoint được tải lên.
 \end{itemize}
@@ -460,9 +460,10 @@ số dải tìm.
 khởi tạo $\mu=0$, $\log\sigma=-0.5$; hai critic MLP 64-64 (ReLU) học $Q(a)\approx r$ (không bootstrap,
 không mạng target); $\alpha_{\mathrm{ent}}$ khởi tạo 1, tự chỉnh với entropy mục tiêu $-6$; Adam, lr
 $3{\times}10^{-4}$; buffer $5{\times}10^4$ cặp $(a,r)$, batch 256; 1 lần cập nhật mỗi iter.
-\item \textbf{SAC chỉ bắt đầu cập nhật khi buffer có $\ge64$ mẫu, tức từ iter thứ 64}; trước đó hành động là
-mẫu ngẫu nhiên từ phân phối khởi tạo (quanh $a=0$, tức quanh gốc; $\sigma=e^{-0.5}\approx0.61$ decade).
-Tại các mốc đánh giá $100$, $150$, $200$, SAC đã cập nhật $37$, $87$, $137$ lần.
+\item \textbf{Khởi động:} SAC chỉ bắt đầu cập nhật khi buffer có $\ge10$ mẫu (\texttt{cfg.sacWarmup}), \textbf{tức từ
+iter thứ 10}; trước đó hành động là mẫu ngẫu nhiên từ phân phối khởi tạo (quanh $a=0$, tức quanh gốc;
+$\sigma=e^{-0.5}\approx0.61$ decade), mỗi iter một bộ $Q,R$ khác nhau. Ngưỡng $10$ là siêu tham số chọn (không tối
+ưu). Tại các mốc đánh giá $100$, $150$, $200$, SAC đã cập nhật $91$, $141$, $191$ lần.
 \item Phần thưởng mỗi quỹ đạo (reward của iter là trung bình trên $20$ quỹ đạo):
 \[
 r=-\big(\mathrm{RMSE}_{\mathrm{pos}} + 0.01\,\mathrm{RMS}(\Delta u) + 0.5\,r_{\mathrm{viol}}
@@ -855,7 +856,7 @@ Checkpoint mốc / dừng & -- & mỗi iter (chỉ SAC/teacher); chạy tới it
 Hành động SAC & $a$ & $\in\mathbb R^6$, $\log_{10}$ hệ số nhân của gốc $Q,R$, không bị chặn\\
 Chain & -- & Bryson (seed 261003001); gốc ngẫu nhiên $10^{[-2,2]}$ (seed 261003101)\\
 Chạy song song & -- & 4 worker cục bộ / iteration (SAC và DAgger); không đổi kết quả\\
-SAC & lr/$\gamma$/batch/buffer & $3{\times}10^{-4}$ / 0 / 256 / $5{\times}10^{4}$; bắt đầu học từ iter 64\\
+SAC & lr/$\gamma$/batch/buffer & $3{\times}10^{-4}$ / 0 / 256 / $5{\times}10^{4}$; bắt đầu học từ iter 10\\
 Học trò & $W$ & $4\times27$, không bias; $\varphi=[e;\hat F;\bar u_k;\bar u_{k+5}-\bar u_k;\bar u_{k+20}-\bar u_k]$\\
 DAgger & $N_D$, chuyến/vòng & $10$, $20$; $\beta_1=1$, sau đó học trò bay ($\alpha=1$); dòng ngẫu nhiên seed$+9900$\\
 Ridge & $\lambda$ & lưới $10^{-6..2}$, CV 5 phần theo chuyến bay; đặc trưng chia RMS\\

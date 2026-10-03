@@ -52,6 +52,9 @@ cfg.cLqrCases = 60;                                  % LQR flights for the c_LQR
 cfg.ckptSuffix = d1_getenv_str('D1_CKPT_SUFFIX', '');
 % sac
 cfg.sacLR = 3e-4; cfg.sacBatch = 256; cfg.sacBufferCap = 5e4;
+% warm-up: SAC updates only once the buffer holds this many (a, r) samples (one per SAC
+% iteration), i.e. from iteration 10; before that, actions are drawn from the initial policy
+cfg.sacWarmup = 10;
 cfg.sacGamma = 0.0;                                  % 1-step bandit (done each ep)
 cfg.sacTargetEntropy = -cfg.actionDim;
 cfg.logEvery = 1;
