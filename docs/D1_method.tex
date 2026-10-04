@@ -186,12 +186,13 @@ LQR song song dùng \emph{cùng} mẫu gió đó.
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
 \item \textbf{Gió trung bình:} tốc độ $U\sim\mathcal U[1,10]$ m/s (\texttt{D1\_WIND\_MIN/MAX}), phương ngang,
 góc phương vị $\psi_w\sim\mathcal U[0,2\pi)$.
-\item \textbf{Gió giật:} mô hình Dryden cho độ cao thấp (MIL-HDBK-1797) tại độ cao tham chiếu
+\item \textbf{Gió giật:} cường độ và độ dài thang của mô hình độ cao thấp MIL-F-8785C (Mục 3.7.3.4, Hình 10--11) tại độ cao tham chiếu
 $h=20$ ft: $\sigma_w=0.1\,U$, $\sigma_u=\sigma_v=\sigma_w/(0.177+0.000823h)^{0.4}\approx0.193\,U$,
 $L_u=L_v=h/(0.177+0.000823h)^{1.2}\approx43.8$ m, $L_w=h=6.1$ m. Mỗi thành phần là quá trình Gauss--Markov
 bậc nhất với hằng số thời gian $L/U$ (nhiễu động bị gió trung bình mang đi), phương sai dừng $\sigma^2$, rời
 rạc hoá chính xác với bước $T_s/2$ và nội suy tuyến tính theo thời gian. Thành phần $u$ dọc hướng gió trung
-bình, $v$ ngang, $w$ thẳng đứng, sau đó quay sang khung quán tính.
+bình, $v$ ngang, $w$ thẳng đứng, sau đó quay sang khung quán tính. Phổ của quá trình bậc nhất này là phổ Dryden
+dọc (MIL-F-8785C, Mục 3.7.1.2); với $v$ và $w$, dạng bậc nhất này thay cho phổ Dryden bậc hai.
 \item \textbf{Lực gió:} cản rotor tuyến tính đã chuẩn hoá theo khối lượng (Faessler et al., RA-L 2018, nhận
 dạng trên quadrotor $0.61$ kg): $F_w=m\,R(\eta)\,\mathrm{diag}(d_x,d_y,d_z)\,R(\eta)\T w(t)$ với
 $d_x=0.425$, $d_y=0.256$, $d_z=0$ s$^{-1}$, $m$ là khối lượng danh nghĩa (lực khí động không đổi theo tải;
@@ -962,8 +963,8 @@ Prediction to No-Regret Online Learning (DAgger). \emph{AISTATS 2011}.
 \item Faessler, M., Franchi, A., \& Scaramuzza, D. (2018). Differential flatness of quadrotor dynamics
 subject to rotor drag for accurate tracking of high-speed trajectories. \emph{IEEE Robotics and Automation
 Letters}, 3(2). arXiv:1712.02402. (Hệ số cản rotor dùng cho gió huấn luyện.)
-\item U.S. Department of Defense (1997). \emph{MIL-HDBK-1797: Flying Qualities of Piloted Aircraft}.
-(Mô hình nhiễu động Dryden cho độ cao thấp.)
+\item U.S. Department of Defense (1980). \emph{MIL-F-8785C: Military Specification, Flying Qualities of Piloted
+Airplanes}. (Phổ Dryden, Mục 3.7.1.2; cường độ và độ dài thang nhiễu động độ cao thấp, Mục 3.7.3.4, Hình 10--11.)
 \item O'Connell, M., Shi, G., Shi, X., Azizzadenesheli, K., Anandkumar, A., Yue, Y., \& Chung, S.-J. (2022).
 Neural-Fly enables rapid learning for agile flight in strong winds. \emph{Science Robotics}, 7(66),
 eabm6597. (Dữ liệu gió đo thực, chỉ dùng để kiểm chứng.)

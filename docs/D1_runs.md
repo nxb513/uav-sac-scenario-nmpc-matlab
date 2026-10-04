@@ -2,7 +2,9 @@
 
 GitHub keeps run artifacts for 30 days (the artifacts of the runs below expire from
 2026-11-02). The author keeps a copy of the artifacts of every run listed here, available on
-request.
+request. The artifacts of the final test (the DAgger runs at SAC iteration 100 and the two
+final-evaluation runs) and the local timing CSVs are attached permanently to the release
+[`d1-paper-v1.0`](https://github.com/nxb513/uav-sac-scenario-nmpc-matlab/releases/tag/d1-paper-v1.0).
 
 Only the GitHub Actions runs listed here are results of the current D1 code and setup
 (`docs/D1_method.pdf`). **Every other run in the Actions history is a draft or superseded
@@ -113,5 +115,6 @@ its 979 steps, then summarized over the flights:
 The largest values come from the first flights of a MATLAB session (train LQR flight 3,
 train MPC flight 1, train P Bryson flights 1-2: first calls) and, for MPC, from flights
 where it diverged (ood flight 51: 139 ms in one step; the active-set iterations grow). The
-CSVs stay local (`results/local_timing`, not committed); the same flights also give P of
+CSVs are not committed (`results/local_timing`) and are attached to the release
+`d1-paper-v1.0`; the same flights also give P of
 both chains, which is compared with the CI results only as a consistency check.

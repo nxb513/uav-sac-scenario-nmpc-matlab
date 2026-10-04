@@ -70,6 +70,6 @@ cfg.codegenDir = fullfile(pwd, 'd1_teacher_codegen');
 cfg.windOn   = strcmp(d1_getenv_str('D1_WIND','1'),'1');
 cfg.windMin  = d1_getenv_num('D1_WIND_MIN', 1);      % mean wind speed range [m/s]
 cfg.windMax  = d1_getenv_num('D1_WIND_MAX', 10);
-cfg.windHft  = 20;                                   % Dryden reference height [ft] (MIL-HDBK-1797)
+cfg.windHft  = 20;                                   % Dryden reference height [ft] (MIL-F-8785C)
 cfg.windDrag = [0.425; 0.256; 0];                    % mass-normalized rotor drag [1/s], Faessler et al. RA-L 2018
 end

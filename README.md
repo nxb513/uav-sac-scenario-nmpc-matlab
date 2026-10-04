@@ -165,8 +165,12 @@ This repository is a public computational runner, not the complete research proj
 contains no papers, manuscript, trained checkpoints or private credentials. Trained
 checkpoints, student files and evaluation outputs are GitHub Actions artifacts of the runs,
 which GitHub keeps for 30 days; the author keeps a copy of the artifacts of every official run
-(`docs/D1_runs.md`), available on request. No reuse license has
-been selected yet; publication on GitHub does not by itself grant an open-source license.
+(`docs/D1_runs.md`), available on request. The outputs of the final test (SAC iteration 100:
+checkpoints, DAgger and student files of both chains, final-evaluation CSVs and trajectories,
+local timing) are attached permanently to the release
+[`d1-paper-v1.0`](https://github.com/nxb513/uav-sac-scenario-nmpc-matlab/releases/tag/d1-paper-v1.0).
+
+The code is released under the MIT License (`LICENSE`).
 
 MATLAB R2024a runs through the official `matlab-actions/setup-matlab@v3` and
 `matlab-actions/run-command@v3`. MathWorks licenses supported products for workflows in

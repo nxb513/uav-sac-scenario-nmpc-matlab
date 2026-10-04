@@ -1,5 +1,6 @@
 function [sg, L] = d1_dryden(U, cfg)
-%D1_DRYDEN Dryden low-altitude turbulence (MIL-HDBK-1797) for mean wind U [m/s] at the
+%D1_DRYDEN Low-altitude turbulence intensities and scale lengths (MIL-F-8785C, Sec. 3.7.3.4,
+% Figs. 10-11) for mean wind U [m/s] at the
 % reference height h = cfg.windHft [ft]: sigma_w = 0.1 U,
 % sigma_u = sigma_v = sigma_w / (0.177 + 0.000823 h)^0.4,
 % L_u = L_v = h / (0.177 + 0.000823 h)^1.2, L_w = h.
