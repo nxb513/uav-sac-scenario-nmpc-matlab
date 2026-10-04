@@ -44,9 +44,16 @@ was cancelled and is not used.
 
 ## Final evaluation at SAC iteration 100
 
-`d1-final-eval.yml` on tag `d1-final-eval-iter100`, both chains with suffix `_iter0100`
-(run = the DAgger runs above), conditions `train` and `ood`, controllers LQR, MPC
-(N = 20), Teacher, P: dispatched after both DAgger runs end.
+`d1-final-eval.yml` on tag `d1-final-eval-iter100`, suffix `_iter0100` (run = the DAgger
+runs above), conditions `train` and `ood`, controllers LQR, MPC (N = 20), Teacher, P. Each
+chain was dispatched as soon as its DAgger run ended, so the evaluation is split over two
+runs on the same flights; the combined summary is `tools/eval/summarize_final_eval.py`
+over the CSVs of both runs.
+
+| Run | Controllers |
+|---|---|
+| 37191803718 | LQR, MPC; Teacher and P of the random-base chain |
+| dispatched after 37190192312 ends | Teacher and P of the Bryson-base chain (`base_ctrls` empty) |
 
 ## Performance versus SAC iteration (DAgger sweep)
 
@@ -54,6 +61,12 @@ was cancelled and is not used.
 |---|---|---|---|
 | 37171887012 | Bryson base | 9-49 | 37131706114 |
 | 37171887012 | Random base | 9-44 | 37131714239 |
+| 37191810147 | Bryson base | 50-99 | 37187904877 |
+| 37191810147 | Random base | 45-99 | 37171580144 |
+
+Run 37191810147 runs on tag `d1-final-iter100` (same DAgger code). The point at iteration
+100 is the final-test DAgger of each chain (table above), whose artifact holds the same
+`sweep_seed<s>_iter0100.csv`.
 
 One job of 37171887012 (Bryson, iteration 12) was cancelled by the runner and rerun as
 attempt 2 of the same run.
