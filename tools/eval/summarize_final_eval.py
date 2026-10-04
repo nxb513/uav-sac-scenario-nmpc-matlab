@@ -61,7 +61,7 @@ def main(folder):
                               pos_all=x['pos_rmse'].median(),
                               pmax_med=ok['pos_max'].median(), vel_med=ok['vel_rmse'].median(),
                               du_med=ok['du_rms'].median(), t_med=x['t_med_us'].median(),
-                              t_p99=x['t_p99_us'].median(), alpha=ok['alpha_mean'].mean(),
+                              t_p99=x['t_p99_us'].median(), alpha=ok['alpha_mean'].mean() if lab.startswith('P') else float('nan'),  # MPC stores QP iterations there
                               conv=x['teacher_conv'].mean(),
                               wLQR=wins(lab, ok, 'LQR')))
         st = pd.DataFrame(stats).sort_values(['done', 'pos_med'], ascending=[False, True])
