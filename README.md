@@ -100,6 +100,14 @@ pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `selec
   - **Diagnostic mode inputs:** `diag`, `surr_eval` (student evaluation), `compare` (with
     `hard`, `plant_perturb`), `consolidate`. The gate-grid mode (`D1_GATE_GRID=1`) exists
     in the code but has no workflow input.
+- **D1 DAgger sweep** (`.github/workflows/d1-sweep.yml`): performance versus SAC iteration.
+  - **Input:** `chains`, a JSON list of `{seed, rqr, run, from, to}`, where `run` is the SAC
+    run whose artifact holds the milestones `checkpoint_seed<s>_iter<NNNN>.mat`.
+  - **One job per milestone iteration:** the DAgger phase on that frozen teacher, plus the
+    teacher and the LQR on the same 15 validation flights.
+  - **Outputs:** per milestone the student file, the DAgger state and
+    `sweep_seed<s>_iter<NNNN>.csv`; the summary job writes `sweep_summary.csv` and
+    `sweep_curve.png` (`tools/eval/plot_sweep.py`).
 - **D1 final evaluation** (`.github/workflows/d1-final-eval.yml`).
   - **Inputs:** `chains` (JSON list of `{seed, rqr, run, suffix}`, where `run` is the
     DAgger run, whose artifact holds both the SAC checkpoint and the student file), `conds`

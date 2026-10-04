@@ -24,6 +24,24 @@ else
     D = struct('iter', 1, 'stats', [], 'cand', [], 'ckptIter', S.st.iter);
 end
 [nW, teacherC] = d1_teacher_pool(cfg, scen, teacher);
+% reference values on the SAME validation flights (diagnostic, not used for selection):
+% the frozen teacher (privileged wind) and the LQR, same capped position RMSE as val_pos
+if ~isfield(D, 'teacherVal')
+    nv = numel(V); vk = cases([V.idx]); vds = {V.ds}; tv = zeros(1, nv); lv = zeros(1, nv);
+    parfor (j = 1:nv, nW)
+        tch = teacherC.Value;                          %#ok<PFBNS> pool Constant: one solver per worker
+        d1_set_teacher_weights(tch, Q, R, cfg);
+        [~, info] = d1_dagger_case(tch, [], vk(j), vds{j}, lqr, cfg);
+        tv(j) = info.posRmse;
+    end
+    for j = 1:nv
+        RL = d1_fly_student([], [], vk(j).Xref, vk(j).Uref, vds{j}, cfg.plant.nominal, lqr, cfg, 'lqr');
+        lv(j) = sqrt(mean(d1_track_err(RL.X, RL.Xr).^2));
+    end
+    D.teacherVal = mean(tv); D.lqrVal = mean(lv);
+    save_state(stateFile, D);
+end
+fprintf('DAGGER_VAL_REF teacher=%.4f lqr=%.4f (validation flights)\n', D.teacherVal, D.lqrVal);
 tStart = tic; dur = []; reserve = 600;               % s kept for selection + consolidation
 n = cfg.daggerCases;
 while D.iter <= cfg.daggerIters
@@ -72,9 +90,16 @@ assert(~isempty(okc), 'd1_dagger_run:nostable', 'no DAgger candidate passed the 
 [~, j] = min([D.cand(okc).val]); best = okc(j);
 stu = D.cand(best); stu.selected = best;
 stu.valAll = [D.cand.val]; stu.rhoAll = [D.cand.rho]; stu.stableAll = [D.cand.stable];
-stu.ckptIter = D.ckptIter;
+stu.ckptIter = D.ckptIter; stu.teacherVal = D.teacherVal; stu.lqrVal = D.lqrVal;
 fprintf('DAGGER_SELECT candidate %d (fit after iteration %d) val_pos=%.4f rho_max=%.4f lambda=%.0e\n', ...
     best, D.cand(best).iterData, D.cand(best).val, D.cand(best).rho, D.cand(best).lambda);
+% one-line summary (performance-versus-SAC-iteration sweep, d1-sweep.yml)
+fid = fopen(fullfile(fileparts(outFile), sprintf('sweep_seed%d_iter%04d.csv', cfg.seed, D.ckptIter)), 'w');
+fprintf(fid, 'seed,random_qr,sac_iter,teacher_val,lqr_val,student_val,selected,rho_max,lambda%s\n', ...
+    sprintf(',val_%d', 1:numel(D.cand)));
+fprintf(fid, '%d,%d,%d,%.6f,%.6f,%.6f,%d,%.6f,%.3g%s\n', cfg.seed, cfg.randomQR, D.ckptIter, ...
+    D.teacherVal, D.lqrVal, stu.val, best, stu.rho, stu.lambda, sprintf(',%.6f', [D.cand.val]));
+fclose(fid);
 conf = d1_consolidate(cfg, lqr, cases, stu);
 conf.iter = D.ckptIter;
 save(outFile, 'stu', 'conf', '-v7.3');

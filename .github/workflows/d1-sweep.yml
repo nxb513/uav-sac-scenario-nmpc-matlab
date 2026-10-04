@@ -1,0 +1,168 @@
+name: D1 DAgger sweep over SAC iterations
+
+# Performance versus SAC iteration ("how long must SAC train"): for every SAC checkpoint
+# iteration in [from, to] of each chain, one job runs the D1 DAgger phase on the frozen
+# teacher of that milestone (checkpoint_seed<s>_iter<NNNN>.mat, a = mu) exactly as in the
+# method (d1_dagger_run: 10 iterations x 20 flights, ridge + CV, stability check,
+# selection on the 15 validation flights, confidences) and also measures the frozen teacher
+# and the LQR on the same validation flights. The summary job plots the three curves
+# (tools/eval/plot_sweep.py). Training is not touched.
+
+on:
+  workflow_dispatch:
+    inputs:
+      chains:
+        description: 'JSON list [{"seed":..,"rqr":0|1,"run":"<SAC run whose artifact holds the milestones>","from":9,"to":49}]'
+        required: true
+        type: string
+      solver:
+        description: "Teacher NMPC solver (training used SQP)"
+        required: false
+        default: "SQP"
+        type: string
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        env:
+          CHAINS: ${{ inputs.chains }}
+        run: |
+          m=$(echo "$CHAINS" | jq -c '[.[] as $c | range($c.from; $c.to + 1) | {seed: $c.seed, rqr: $c.rqr, run: $c.run, iter: .}]')
+          echo "jobs: $(echo "$m" | jq length)"
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
+
+  dagger:
+    needs: plan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        job: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      D1_SEED: ${{ matrix.job.seed }}
+      D1_RANDOM_QR: ${{ matrix.job.rqr }}
+      D1_DAGGER: "1"
+      D1_WALL_SECONDS: "20000"
+      D1_STEPS: "1000"
+      D1_CASES_PER_EVAL: "20"
+      D1_WIND: "1"
+      D1_WORKERS: "4"
+      D1_SOLVER: ${{ inputs.solver }}
+      D1_RUN_DIR: ${{ github.workspace }}/results/d1_joint/seed${{ matrix.job.seed }}
+      ACADOS_COMMIT: 503364817c872d474ab5bed219c26760ac267769   # official release acados v0.6.0
+    steps:
+      - name: Check out research package
+        uses: actions/checkout@v6
+
+      - name: Download the SAC milestones
+        uses: actions/download-artifact@v4
+        with:
+          name: d1-joint-ckpt-seed${{ matrix.job.seed }}-${{ matrix.job.run }}
+          path: results/d1_joint/seed${{ matrix.job.seed }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ matrix.job.run }}
+
+      - name: Select the milestone
+        run: |
+          suf=$(printf '_iter%04d' "${{ matrix.job.iter }}")
+          echo "D1_CKPT_SUFFIX=$suf" >> "$GITHUB_ENV"
+          test -f "$D1_RUN_DIR/checkpoint_seed${D1_SEED}${suf}.mat" \
+            || { echo "missing milestone checkpoint_seed${D1_SEED}${suf}.mat"; exit 1; }
+          # keep only the selected milestone (smaller upload)
+          find "$D1_RUN_DIR" -name 'checkpoint_seed*_iter*.mat' ! -name "checkpoint_seed${D1_SEED}${suf}.mat" -delete
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential git unzip wget
+
+      - name: Clone and build acados (pinned)
+        run: |
+          set -euxo pipefail
+          git clone https://github.com/acados/acados.git "$GITHUB_WORKSPACE/acados"
+          cd "$GITHUB_WORKSPACE/acados"
+          git checkout "$ACADOS_COMMIT"
+          git submodule update --recursive --init
+          mkdir -p build && cd build
+          cmake -DACADOS_WITH_QPOASES=ON -DACADOS_INSTALL_DIR="$GITHUB_WORKSPACE/acados" ..
+          make install -j4
+          echo "ACADOS_INSTALL_DIR=$GITHUB_WORKSPACE/acados" >> "$GITHUB_ENV"
+          echo "ACADOS_SOURCE_DIR=$GITHUB_WORKSPACE/acados" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/acados/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Download CasADi (MATLAB, linux64)
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/acados/external/casadi-matlab"
+          cd "$GITHUB_WORKSPACE/acados/external/casadi-matlab"
+          wget -q https://github.com/casadi/casadi/releases/download/3.6.7/casadi-3.6.7-linux64-matlab2018b.zip -O casadi.zip
+          unzip -q casadi.zip && rm -f casadi.zip
+          echo "CASADI_DIR=$GITHUB_WORKSPACE/acados/external/casadi-matlab" >> "$GITHUB_ENV"
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024a
+          products: >-
+            Deep_Learning_Toolbox
+            Optimization_Toolbox
+            Control_System_Toolbox
+            Statistics_and_Machine_Learning_Toolbox
+            Parallel_Computing_Toolbox
+          cache: true
+
+      - name: DAgger on the milestone (seed ${{ matrix.job.seed }}, iter ${{ matrix.job.iter }})
+        timeout-minutes: 340
+        uses: matlab-actions/run-command@v3
+        with:
+          command: >-
+            setenv('ENV_RUN','true');
+            setenv('ACADOS_INSTALL_DIR',getenv('ACADOS_INSTALL_DIR'));
+            addpath(getenv('CASADI_DIR'));
+            addpath(fullfile(getenv('ACADOS_INSTALL_DIR'),'interfaces','acados_matlab_octave'));
+            addpath(genpath('src')); addpath('configs'); addpath('experiments');
+            run_d1_joint_pipeline;
+
+      - name: Upload the student of this milestone
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-sweep-seed${{ matrix.job.seed }}-iter${{ matrix.job.iter }}-${{ github.run_id }}
+          path: |
+            results/d1_joint/seed${{ matrix.job.seed }}/student_seed*.mat
+            results/d1_joint/seed${{ matrix.job.seed }}/dagger_seed*.mat
+            results/d1_joint/seed${{ matrix.job.seed }}/sweep_seed*.csv
+          if-no-files-found: warn
+          retention-days: 30
+
+  summary:
+    needs: dagger
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out research package
+        uses: actions/checkout@v6
+      - name: Download the sweep results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: d1-sweep-seed*-${{ github.run_id }}
+          path: sweep_in
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Plot the curve
+        run: |
+          pip install --quiet matplotlib
+          python tools/eval/plot_sweep.py sweep_in sweep_out | tee sweep_out_table.md
+          { echo "## DAgger sweep: validation RMSE vs SAC iteration"; cat sweep_out_table.md; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the curve
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-sweep-summary-${{ github.run_id }}
+          path: sweep_out/
+          retention-days: 30

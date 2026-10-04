@@ -489,7 +489,9 @@ lặp / không dùng được, thời gian giải lớn nhất và p99 (chỉ đ
 \texttt{checkpoint\_\allowbreak seed<s>\_\allowbreak iter<NNNN>.mat} sau \textbf{mỗi iter} (chỉ SAC/teacher), dùng được làm teacher
 cho DAgger tại bất kỳ iter nào. \textbf{Dừng đúng iter} (\texttt{D1\_STOP\_ITER}): dừng ở $100$. Vì mọi iter đều có
 checkpoint, đường hiệu suất theo số iter (khảo sát cần train bao lâu) được dựng sau khi train, từ các checkpoint
-này, không làm thay đổi quá trình train.
+này, không làm thay đổi quá trình train: workflow \texttt{d1-sweep.yml} chạy pha DAgger (Mục 9) trên teacher của
+từng checkpoint, mỗi checkpoint một job, rồi vẽ RMSE kiểm định của học trò được chọn, của teacher đóng băng và
+của LQR theo số iter SAC (\texttt{tools/eval/plot\_sweep.py}).
 \item \textbf{Hai chain:} (1) gốc Bryson, seed \texttt{261003001}; (2) gốc ngẫu nhiên (\texttt{D1\_RANDOM\_QR=1}):
 log-uniform $10^{[-2,2]}$ mỗi trọng số, cố định theo seed \texttt{261003101}. LQR luôn dùng Bryson. Cả hai cùng quy
 tắc: hành động không bị chặn, dừng ở iter $100$. Hai chain dùng chung nhiễu thăm dò, quỹ đạo và gió (so sánh
@@ -571,7 +573,9 @@ lệch.
 \textbf{Ngân sách} (\texttt{D1\_DAGGER\_ITERS}, mặc định $N_D=10$): $10\times20$ chuyến $\approx1.96\times10^5$
 lần giải teacher. 20 chuyến của một vòng chạy song song (gió rút tuần tự trên client); resume theo từng vòng; mỗi chuyến in một dòng \texttt{DAGGER\_CASE} (ai bay, tỉ lệ nhãn,
 thời gian giải, RMSE), mỗi vòng một dòng \texttt{DAGGER\_ITER} ($\lambda$, MSE kiểm định chéo,
-$\rho_{\max}$, RMSE kiểm định).
+$\rho_{\max}$, RMSE kiểm định). Để so sánh (chẩn đoán, không dùng để chọn), trước vòng 1 teacher đóng băng và LQR
+bay đúng 15 chuyến kiểm định với cùng định nghĩa RMSE (dòng \texttt{DAGGER\_VAL\_REF}); kết quả lưu trong file học
+trò (\texttt{stu.teacherVal}, \texttt{stu.lqrVal}) và một dòng \texttt{sweep\_seed<s>\_iter<NNNN>.csv}.
 
 \textbf{Định lý áp dụng tới đâu.} Mất mát ridge lồi mạnh theo $W$ và Follow-the-Leader trên mất mát lồi mạnh là
 no-regret, nên giả thiết của Định lý 3.1/3.3 được thoả \emph{về cấu trúc} (chuyên gia cố định, mất mát lồi
