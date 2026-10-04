@@ -16,7 +16,7 @@ first file in path order), so the CSVs of several runs can be summarized togethe
 Computation time is NOT reported by default: the CSVs of CI jobs come from shared virtual
 runners with an unspecified CPU. `--timing` adds the time columns; it is meant for runs on
 one documented local machine (median over flights of the per-flight median / p99 of the
-control computation per step, maximum over flights of the per-flight maximum, and for MPC
+control computation per step, median and maximum over flights of the per-flight maximum, and for MPC
 the mean number of active-set iterations per step).
 
 Usage: summarize_final_eval.py [--timing] <input_dir>
@@ -79,7 +79,7 @@ def main(folder, timing=False):
                               conv=x['teacher_conv'].mean(),
                               wLQR=wins(lab, ok, 'LQR'),
                               t_med=x['t_med_us'].median(), t_p99=x['t_p99_us'].median(),
-                              t_max=x['t_max_us'].max(),
+                              t_max=x['t_max_us'].max(), t_maxmed=x['t_max_us'].median(),
                               qp_it=x['alpha_mean'].mean() if lab == 'MPC' else float('nan')))
         st = pd.DataFrame(stats).sort_values(['done', 'pos_med'], ascending=[False, True])
         print('| controller | completed | restarts | pos RMSE med (completed) [m] | pos RMSE mean (completed) '
@@ -93,11 +93,11 @@ def main(folder, timing=False):
         if timing:
             print('\nComputation per control step (this machine only)\n')
             print('| controller | flights | median of per-flight median [us] | median of per-flight p99 [us] '
-                  '| max over flights [us] | MPC active-set iterations / step (mean) |')
-            print('|---|---|---|---|---|---|')
+                  '| median of per-flight max [us] | max over flights [us] | MPC active-set iterations / step (mean) |')
+            print('|---|---|---|---|---|---|---|')
             for _, r in st.iterrows():
                 print(f"| {r['label']} | {r['n']} | {fmt(r['t_med'], 1)} | {fmt(r['t_p99'], 1)} | "
-                      f"{fmt(r['t_max'], 1)} | {fmt(r['qp_it'], 3)} |")
+                      f"{fmt(r['t_maxmed'], 1)} | {fmt(r['t_max'], 1)} | {fmt(r['qp_it'], 3)} |")
         print('\nPer family: pos RMSE median over completed flights (not completed)\n')
         print('| controller | ' + ' | '.join(FAMS) + ' |')
         print('|---|' + '---|' * len(FAMS))

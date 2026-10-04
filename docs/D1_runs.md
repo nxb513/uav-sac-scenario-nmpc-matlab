@@ -78,3 +78,30 @@ Run 37191810147 runs on tag `d1-final-iter100` (same DAgger code). The point at 
 
 One job of 37171887012 (Bryson, iteration 12) was cancelled by the runner and rerun as
 attempt 2 of the same run.
+
+## Computation time on one local machine (not a CI run)
+
+`experiments/d1_local_timing.m` on 2026-10-04 (code `585b2ba`; `d1_final_eval.m` and
+`src/joint` identical to tag `d1-final-eval-iter100`), with the iter-100 checkpoint and
+student files of the DAgger runs above. Machine: Intel Core i9-13900HX, Windows 11 Home,
+MATLAB R2024a, one computational thread, process pinned to logical processor 0 (affinity
+mask 1), on AC power. All three controllers run as interpreted MATLAB; the teacher is not
+timed. Time per control step in microseconds; per flight the median, p99 and maximum over
+its 979 steps, then summarized over the flights:
+
+| Condition | Controller | Flights | Median of medians | Median of p99 | Median of maxima | Max over flights | MPC QP iterations / step |
+|---|---|---|---|---|---|---|---|
+| train | LQR | 150 | 0.7 | 1.6 | 5.3 | 15795.9 | |
+| train | MPC (N = 20) | 150 | 97.8 | 217.8 | 485.9 | 121999.3 | 1.071 |
+| train | P (Bryson base) | 150 | 16.9 | 29.8 | 141.2 | 85168.4 | |
+| train | P (random base) | 150 | 17.2 | 27.8 | 171.9 | 1295.5 | |
+| ood | LQR | 100 | 0.7 | 1.4 | 5.5 | 378.7 | |
+| ood | MPC (N = 20) | 100 | 99.5 | 148.9 | 729.0 | 138906.1 | 1.699 |
+| ood | P (Bryson base) | 100 | 16.6 | 23.6 | 44.0 | 1702.9 | |
+| ood | P (random base) | 100 | 16.7 | 23.0 | 41.6 | 1196.3 | |
+
+The largest values come from the first flights of a MATLAB session (train LQR flight 3,
+train MPC flight 1, train P Bryson flights 1-2: first calls) and, for MPC, from flights
+where it diverged (ood flight 51: 139 ms in one step; the active-set iterations grow). The
+CSVs stay local (`results/local_timing`, not committed); the same flights also give P of
+both chains, which is compared with the CI results only as a consistency check.
