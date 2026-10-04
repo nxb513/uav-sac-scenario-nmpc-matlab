@@ -21,7 +21,7 @@ is documented in `docs/D1_method.pdf`.
 | `d1_case_len`, `d1_plant_step`, `d1_track_err`, `d1_sat` | common flight rules |
 | `d1_fhat`, `d1_student_init`, `d1_student_push`, `d1_student_feature` | the linear student's force estimate, memory and 27 features |
 | `d1_fly_student` | teacher-free flight of the student (alpha = 1), the blend, or the LQR |
-| `d1_dagger_case`, `d1_dagger_run` | one DAgger data flight; the DAgger loop, selection, confidences, student file |
+| `d1_dagger_case`, `d1_dagger_run` | one DAgger data flight; the DAgger loop (flights in parallel), teacher/LQR reference on the validation flights, selection, confidences, student file, sweep CSV line |
 | `d1_ridge_fit`, `d1_student_stability`, `d1_val_set` | closed-form ridge with case-grouped CV; linearized stability check; validation flights |
 | `d1_consolidate`, `d1_fit_logistic`, `d1_cs_feature`, `d1_conf_feature`, `d1_predict_logistic` | c_S and c_LQR |
 | `d1_blend_control` | the deployed controller |

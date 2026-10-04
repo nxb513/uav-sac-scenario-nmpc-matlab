@@ -45,7 +45,7 @@ the linear student + DAgger; it is now implemented and merged into `docs/D1_meth
 | `experiments/run_d1_joint_pipeline.m` | SAC phase (teacher tuning), DAgger phase (`D1_DAGGER=1`), diagnostic modes |
 | `experiments/d1_final_eval.m` | Final evaluation: LQR, LQI, linear MPC (N = 5), Teacher (oracle), P under measured wind |
 | `src/joint/d1_*.m` | The single shared definitions used by both scripts (see `src/joint/README.md`) |
-| `src/joint/d1_dagger_run.m` | DAgger loop, selection, confidences, student file |
+| `src/joint/d1_dagger_run.m` | DAgger loop, teacher/LQR reference on the validation flights, selection, confidences, student file, sweep CSV line |
 | `src/joint/d1_teacher_build_solver.m` | acados scenario-NMPC teacher with the wind-force parameter |
 | `tools/wind/` | Download and convert measured wind (validation only, inside CI jobs) |
 | `tools/eval/summarize_final_eval.py` | Markdown summary of the final-evaluation CSVs |

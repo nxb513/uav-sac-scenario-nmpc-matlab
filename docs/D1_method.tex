@@ -386,9 +386,9 @@ khác bằng $0$). Cửa sổ hoàn thiện lấy thêm $3$ điểm mỗi phía 
 $N_c,\dots,N-1$); ở stage $0..N_c-1$: $|\delta T|\le T_{\max}$, $|\delta\tau|\le[1,1,0.5]$.
 \item Ràng buộc actuator áp qua chặn trạng thái $u_{\mathrm{prev}}\in[u_{\min},u_{\max}]$; \textbf{không} có
 ràng buộc góc, tốc độ góc hay độ nghiêng.
-\item Trọng số giai đoạn $Q,R$ \textbf{khởi tạo Bryson}, sau đó do SAC tinh chỉnh (Mục 8); cập nhật nóng
-\texttt{cost\_W} không dựng lại solver. Trọng số cuối kỳ giữ cố định $Q_0$ (Bryson), SAC không chỉnh (cờ
-\texttt{cfg.Qf}$\,=0$ trong mã không được solver sử dụng).
+\item Trọng số giai đoạn $Q,R$ \textbf{khởi tạo tại gốc} (Bryson; chain đối chứng: gốc ngẫu nhiên), sau đó do SAC
+tinh chỉnh (Mục 8); cập nhật nóng \texttt{cost\_W} không dựng lại solver. Trọng số cuối kỳ giữ cố định $Q_0$
+(Bryson) ở \emph{cả hai} chain, SAC không chỉnh (cờ \texttt{cfg.Qf}$\,=0$ trong mã không được solver sử dụng).
 \item Giải bằng \textbf{acados}, mô hình ký hiệu \textbf{CasADi}, động lực học rời rạc (RK4 ký hiệu cho
 từng kịch bản). Kiểu NLP chọn qua \texttt{D1\_SOLVER}: \texttt{SQP} (mặc định, dùng cho mọi run huấn luyện
 và đánh giá; $\le50$ vòng, tìm kiếm đường merit) hoặc \texttt{SQP\_RTI} (1 vòng, tuỳ chọn). QP: HPIPM partial
@@ -405,8 +405,8 @@ hoặc $\delta u_0$ không hữu hạn: giữ $u_{\mathrm{prev}}$ và \textbf{đ
 \item \textbf{Đặt lại solver} (\texttt{d1\_teacher\_reset}): gọi \texttt{reset()} của acados (xoá nghiệm lặp,
 multiplier, bộ nhớ warm start của QP) rồi đặt nghiệm khởi tạo $x$ dọc tham chiếu, $\delta u=0$. Thực hiện ở
 \textbf{đầu mỗi quỹ đạo}, \textbf{sau mỗi lần giải không dùng được} và \textbf{sau mỗi lần plant được đặt
-lại do phân kỳ} (Mục 4.1). Lý do: cùng một đối tượng solver được
-dùng suốt tiến trình; nếu không đặt lại, multiplier hỏng từ một lần giải thất bại làm mọi lần giải sau đều
+lại do phân kỳ} (Mục 4.1). Lý do: một đối tượng solver được dùng cho nhiều chuyến (mỗi worker một solver
+khi chạy song song; một solver suốt tiến trình ở các chế độ chạy tuần tự); nếu không đặt lại, multiplier hỏng từ một lần giải thất bại làm mọi lần giải sau đều
 thất bại cho tới khi khởi động lại tiến trình. Cùng quy tắc bước này được dùng khi huấn luyện, trong các chế
 độ chẩn đoán/so sánh và trong script đánh giá cuối.
 \item Teacher chỉ tồn tại khi huấn luyện (sinh nhãn, reward) và như \textbf{cận trên (oracle)} trong đánh
@@ -419,7 +419,8 @@ flatness quadrotor — Mellinger \& Kumar (2011); teacher có thông tin đặc 
 \noindent\textbf{Sự cố đã giải quyết: solver treo (phát hiện 2026-09-30, xác định nguyên nhân 2026-10-02).}
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
 \item \emph{Triệu chứng:} thỉnh thoảng một quỹ đạo in loạt lỗi QP rồi không kết thúc trong nhiều giờ (100\% CPU); resume
-treo lại đúng bước cũ (tất định). Quỹ đạo bình thường: trung vị 13 s, lớn nhất 101 s; lời giải bình thường $\le0.5$ s.
+treo lại đúng bước cũ (tất định). Lần giải không treo luôn kết thúc trong vài giây vì số vòng bị chặn (lâu nhất quan
+sát được sau khi sửa: $4.3$ s).
 \item \emph{Nguyên nhân:} commit acados ghim trước đây (\texttt{3edf443}, bản master chưa phát hành, sau v0.6.0) kéo theo
 HPIPM \texttt{bad1123}, trong đó bước hiệu chỉnh quán tính (thêm vào HPIPM ngày 2026-07-31) tăng regularization
 \texttt{preg} ($\times8$ hoặc $\times100$) mỗi khi phân rã Cholesky của Riccati suy biến, \emph{không giới hạn số lần}. Khi dữ
@@ -461,7 +462,8 @@ số dải tìm.
 (dạng SAC cho hành động không bị chặn; log-xác suất Gaussian thuần),
 khởi tạo $\mu=0$, $\log\sigma=-0.5$; hai critic MLP 64-64 (ReLU) học $Q(a)\approx r$ (không bootstrap,
 không mạng target); $\alpha_{\mathrm{ent}}$ khởi tạo 1, tự chỉnh với entropy mục tiêu $-6$; Adam, lr
-$3{\times}10^{-4}$; buffer $5{\times}10^4$ cặp $(a,r)$, batch 256; 1 lần cập nhật mỗi iter.
+$3{\times}10^{-4}$; buffer $5{\times}10^4$ cặp $(a,r)$; mỗi lần cập nhật dùng $\min(256,n)$ mẫu rút đều có hoàn lại từ
+$n$ mẫu đang có; gradient actor ước lượng bằng một mẫu $\varepsilon$; 1 lần cập nhật mỗi iter.
 \item \textbf{Khởi động:} SAC chỉ bắt đầu cập nhật khi buffer có $\ge10$ mẫu (\texttt{cfg.sacWarmup}), \textbf{tức từ
 iter thứ 10}; trước đó hành động là mẫu ngẫu nhiên từ phân phối khởi tạo (quanh $a=0$, tức quanh gốc;
 $\sigma=e^{-0.5}\approx0.61$ decade), mỗi iter một bộ $Q,R$ khác nhau. Ngưỡng $10$ là siêu tham số chọn (không tối
@@ -495,7 +497,7 @@ của LQR theo số iter SAC (\texttt{tools/eval/plot\_sweep.py}).
 \item \textbf{Hai chain:} (1) gốc Bryson, seed \texttt{261003001}; (2) gốc ngẫu nhiên (\texttt{D1\_RANDOM\_QR=1}):
 log-uniform $10^{[-2,2]}$ mỗi trọng số, cố định theo seed \texttt{261003101}. LQR luôn dùng Bryson. Cả hai cùng quy
 tắc: hành động không bị chặn, dừng ở iter $100$. Hai chain dùng chung nhiễu thăm dò, quỹ đạo và gió (so sánh
-cặp; xem lưu ý về bộ sinh số ở Mục 2).
+cặp; xem lưu ý về bộ sinh số ở Mục 4).
 \end{itemize}
 {\small\itshape Nguồn: Haarnoja et al. (2018), Soft Actor-Critic. Lưu ý: dùng RL để tinh chỉnh trọng số
 MPC cố định có ít tài liệu nền; Bryson chỉ đóng vai KHỞI TẠO cho SAC. Kết quả SAC tốt trên tập train
@@ -806,7 +808,9 @@ Chỉ số co rút ($\Delta V_H$, $g_H$) chỉ dùng nội bộ để tạo nhã
 \subsection{Đánh giá cuối với gió đo thực (\texttt{experiments/d1\_final\_eval.m})}
 Script riêng, chạy bằng workflow \texttt{d1-final-eval.yml}; mỗi chain được đánh giá tại mốc chỉ định: checkpoint
 SAC (\texttt{D1\_CKPT}) cho teacher và file học trò cùng mốc (\texttt{D1\_STUDENT}; bắt buộc để chạy P; phải
-thuộc đúng iter của checkpoint). \texttt{run} của chain là run DAgger (artifact của nó chứa cả hai). Script gọi
+thuộc đúng iter của checkpoint). \texttt{run} của chain là run DAgger của \texttt{d1-joint-pipeline.yml} (artifact
+của nó chứa cả hai); học trò của workflow khảo sát \texttt{d1-sweep.yml} nằm trong artifact riêng không kèm
+checkpoint nên chưa đưa thẳng vào đánh giá cuối. Script gọi
 đúng các hàm dùng chung của \texttt{src/joint}. \textbf{Mọi bộ điều khiển chỉ biết mô hình danh nghĩa}; plant
 thật là mẫu LHS của repo mà bộ điều khiển không biết.
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
@@ -862,8 +866,9 @@ Gió & $U$; gió giật; lực & $\mathcal U[1,10]$ m/s; Dryden $h=20$ ft; rotor
 Checkpoint mốc / dừng & -- & mỗi iter (chỉ SAC/teacher); dừng ở iter $100$\\
 Hành động SAC & $a$ & $\in\mathbb R^6$, $\log_{10}$ hệ số nhân của gốc $Q,R$, không bị chặn\\
 Chain & -- & Bryson (seed 261003001); gốc ngẫu nhiên $10^{[-2,2]}$ (seed 261003101)\\
-Chạy song song & -- & 4 worker cục bộ / iteration (SAC và DAgger); không đổi kết quả\\
-SAC & lr/$\gamma$/batch/buffer & $3{\times}10^{-4}$ / 0 / 256 / $5{\times}10^{4}$; bắt đầu học từ iter 10\\
+Chạy song song & -- & 4 worker cục bộ / iteration (SAC và DAgger); quỹ đạo, gió rút trước trên client;
+kết quả không lặp lại được chính xác từng bit\\
+SAC & lr/$\gamma$/batch/buffer & $3{\times}10^{-4}$ / 0 / $\min(256,n)$ / $5{\times}10^{4}$; bắt đầu học từ iter 10\\
 Học trò & $W$ & $4\times27$, không bias; $\varphi=[e;\hat F;\bar u_k;\bar u_{k+5}-\bar u_k;\bar u_{k+20}-\bar u_k]$\\
 DAgger & $N_D$, chuyến/vòng & $10$, $20$; $\beta_1=1$, sau đó học trò bay ($\alpha=1$); dòng ngẫu nhiên seed$+9900$\\
 Ridge & $\lambda$ & lưới $10^{-6..2}$, CV 5 phần theo chuyến bay; đặc trưng chia RMS\\
