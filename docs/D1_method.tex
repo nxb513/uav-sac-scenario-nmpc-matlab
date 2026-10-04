@@ -128,8 +128,10 @@ còn thay đổi. Pha 2 chạy trên checkpoint chỉ định (\texttt{D1\_DAGGE
 triển khai. Hai pha đều \textbf{resume được} đến mức từng iteration (pha 1: checkpoint SAC; pha 2: file trạng thái
 \texttt{dagger\_seed<s><suffix>.mat}). Các chuyến bay của một iteration (20 quỹ đạo SAC hoặc 20 chuyến DAgger)
 chạy \textbf{song song} trên các worker cục bộ (\texttt{d1\_teacher\_pool}, mặc định 4); gió của từng chuyến được
-rút \emph{tuần tự} trên client trước khi bay, mỗi chuyến tự đặt lại solver và trọng số, nên kết quả không phụ thuộc
-số worker hay chuyến nào chạy trên worker nào. Mọi lượt bay dùng để học đều có \textbf{gió ngẫu nhiên}
+rút \emph{tuần tự} trên client trước khi bay, nên các lần rút này không phụ thuộc số worker. Mỗi chuyến tự đặt lại
+solver và trọng số, nhưng một worker dùng lại solver của nó cho nhiều chuyến và thứ tự giao chuyến thay đổi giữa các
+lần chạy; đã quan sát thấy cùng chuyến bay (cùng $Q,R$, quỹ đạo, gió) cho kết quả khác nhau giữa hai lần chạy, nên
+kết quả \textbf{không lặp lại được chính xác từng bit} khi chạy song song. Mọi lượt bay dùng để học đều có \textbf{gió ngẫu nhiên}
 (Mục 4). Khi triển khai chỉ còn LQR $+$ $W\varphi$ $+$ hai logistic; \textbf{không} giải NMPC.
 
 % ===================== 2 =====================

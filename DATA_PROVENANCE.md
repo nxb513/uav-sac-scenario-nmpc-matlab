@@ -10,8 +10,9 @@ M = 5 model scenarios (first draw after `rng(seed)`), and, from the run's random
 SAC exploration. The bank build reseeds the global stream per case and does not restore
 it, so these SAC-phase draws are the same for every chain (the seed sets only the model
 scenarios and the random Q,R base). These draws are made by the client in flight order
-before the flights of an iteration run in parallel, so the data do not depend on the
-number of workers. The DAgger phase draws its cases and winds from `rng(seed + 9900)` (state
+before the flights of an iteration run in parallel, so these draws do not depend on the
+number of workers; the flight results themselves are not bit-for-bit reproducible between
+runs (a worker reuses its solver across flights in a varying order). The DAgger phase draws its cases and winds from `rng(seed + 9900)` (state
 saved in the DAgger state file); its 15 validation flights draw their winds from a dedicated
 `RandStream(seed + 7700)`. No measured wind data are used in training.
 

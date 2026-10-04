@@ -2,10 +2,12 @@ function [nW, teacherC] = d1_teacher_pool(cfg, scen, teacher)
 %D1_TEACHER_POOL Local workers for the parallel flights of one SAC / DAgger iteration.
 % teacher is the client's solver (built by d1_teacher_build_solver, which generated and
 % compiled the acados code in cfg.codegenDir). Each worker loads that code once into its
-% own solver (d1_teacher_build_solver(..., reuse = true)) through a parallel.pool.Constant,
-% so no two flights ever share a solver. Every flight starts with d1_teacher_reset and sets
-% the teacher weights itself, and its wind is drawn by the client beforehand, so a flight's
-% result does not depend on which worker flies it or on the number of workers.
+% own solver (d1_teacher_build_solver(..., reuse = true)) through a parallel.pool.Constant;
+% flights on the same worker reuse that solver one after another. Every flight starts with
+% d1_teacher_reset and sets the teacher weights itself, and its case and wind are drawn by
+% the client beforehand (independent of the number of workers). The flight-to-worker
+% assignment varies between runs and results were observed to differ between runs, so they
+% are not bit-for-bit reproducible.
 % nW = number of workers for parfor (0 = serial on the client); teacherC.Value = the solver
 % to use inside the parfor body.
 nW = 0; teacherC = struct('Value', teacher);

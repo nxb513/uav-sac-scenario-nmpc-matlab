@@ -62,7 +62,7 @@ cfg.logEvery = 1;
 % (1 = every iteration); 0 = off
 cfg.ckptEvery = d1_getenv_num('D1_CKPT_EVERY_ITER', 1);
 % parallel flights: the flights of one SAC iteration / DAgger iteration run on this many
-% local workers (d1_teacher_pool); 0 = serial on the client. Results do not depend on it.
+% local workers (d1_teacher_pool); 0 = serial on the client (draws do not depend on it).
 cfg.nWorkers = d1_getenv_num('D1_WORKERS', 4);
 % acados code generated once by the client and loaded by every worker (absolute path)
 cfg.codegenDir = fullfile(pwd, 'd1_teacher_codegen');

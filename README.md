@@ -76,8 +76,10 @@ pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `selec
   - **SAC phase** (default). Main inputs: `seeds`, `random_qr`, `wall_seconds`,
     `stop_iter`, `ckpt_every`, `workers`, `wind`, `solver`, and `resume_run_id` (empty
     means a fresh start). The 20 flights of an iteration run in parallel on `workers`
-    (default 4) local MATLAB workers; their winds are drawn in order by the client, so the
-    results do not depend on the number of workers.
+    (default 4) local MATLAB workers; their cases and winds are drawn in order by the
+    client, so these draws do not depend on the number of workers. A worker reuses its
+    solver for several flights and the flight-to-worker assignment varies, so results are
+    not bit-for-bit reproducible between runs (observed).
   - **Research setup (2026-10-03):** two chains, `stop_iter=100`, `ckpt_every=1`, SAC
     warm-up 10 iterations (updates from iteration 10); the checkpoint of every iteration is
     kept so that the performance-versus-iterations curve can be built afterwards: Bryson base (seed 261003001,
