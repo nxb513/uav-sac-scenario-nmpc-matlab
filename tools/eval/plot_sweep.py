@@ -53,7 +53,7 @@ def main(src, out):
         ax.axhline(lq, color=REF, lw=1.5, ls='--', zorder=1)
         ax.plot(it, te, color=TEACHER, lw=2, marker='o', ms=4, zorder=2, label='Teacher (a = mu)')
         ax.plot(it, st, color=STUDENT, lw=2, marker='o', ms=4, zorder=3, label='Student (DAgger)')
-        ax.text(it[-1], lq, '  LQR', color=TEXT, va='center', fontsize=9)
+        ax.text(it[0], lq, 'LQR', color=TEXT, va='bottom', ha='left', fontsize=9)
         ax.set_title('seed %d (%s)' % (s, base), color=TEXT, fontsize=11, loc='left')
         ax.set_xlabel('SAC iteration (checkpoint)', color=TEXT)
         ax.grid(True, color=GRID, lw=0.8); ax.set_axisbelow(True)
