@@ -253,7 +253,7 @@ $\min(1000,\ n_{\mathrm{ref}}-N-1)=979$ bước (\texttt{d1\_case\_len}).
 $\norm{p}>10^4$ m.
 \item \textbf{Luôn bay đủ quỹ đạo:} khi phân kỳ, lượt bay \textbf{không} dừng; plant được đặt lại đúng trên
 tham chiếu ở bước kế tiếp, trạng thái trong của bộ điều khiển được đặt lại (bộ nhớ của học trò,
-$u_{\mathrm{prev}}$, tích phân $z$, solver/tập ràng buộc hoạt động), số lần đặt lại được đếm, và bay tiếp
+$u_{\mathrm{prev}}$, solver/tập ràng buộc hoạt động), số lần đặt lại được đếm, và bay tiếp
 đến hết.
 \item \textbf{Sai số bám:} $e_k=\norm{p_k-p_{\mathrm{ref},k+1}}$ (trạng thái sau bước $k$ so với tham chiếu
 $k{+}1$), \textbf{chặn ở $5$ m}; bước phân kỳ tính bằng $5$ m. RMSE lấy trên đủ số bước.
@@ -812,16 +812,15 @@ SAC (\texttt{D1\_CKPT}) cho teacher và file học trò cùng mốc (\texttt{D1\
 thuộc đúng iter của checkpoint). \texttt{run} của chain là run DAgger của \texttt{d1-joint-pipeline.yml} (artifact
 của nó chứa cả hai); học trò của workflow khảo sát \texttt{d1-sweep.yml} nằm trong artifact riêng không kèm
 checkpoint nên chưa đưa thẳng vào đánh giá cuối. \textbf{Bài test chốt} đánh giá cả hai chain tại iter 100
-(\texttt{\_iter0100}); DAgger và đánh giá cuối của nó chạy trên tag \texttt{d1-final-iter100}. Danh sách run chính
+(\texttt{\_iter0100}); DAgger chạy trên tag \texttt{d1-final-iter100}, đánh giá cuối trên tag
+\texttt{d1-final-eval-iter100} (chỉ khác ở mã đánh giá: bỏ LQI, MPC $N=20$). Danh sách run chính
 thức nằm ở \texttt{docs/D1\_runs.md}; mọi run khác trong lịch sử GitHub Actions là nháp hoặc đã thay thế (giữ
 lại, không xoá). Script gọi
 đúng các hàm dùng chung của \texttt{src/joint}. \textbf{Mọi bộ điều khiển chỉ biết mô hình danh nghĩa}; plant
 thật là mẫu LHS của repo mà bộ điều khiển không biết.
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
-\item \textbf{Bộ điều khiển.} LQR (Mục 6); \textbf{LQI}: tăng cường $z_{k+1}=z_k+T_s\,e_{\mathrm{pos},k}$,
-$Q_{\mathrm{aug}}=\mathrm{blkdiag}(Q_0,\ I/z_{\mathrm{allow}}^2)$ với $z_{\mathrm{allow}}=0.1$ m$\times1$ s,
-$R_0$, giải DARE $\to[K_x,K_I]$, $u=\mathrm{sat}(u_h-K_xe-K_Iz)$, anti-windup kiểu kẹp; \textbf{MPC tuyến tính}
-$N=5$: mô hình $x_{j+1}=A_dx_j+B_d(u_j-u_h)$, chi phí $\sum_{j=1}^{N-1}\norm{x_j-r_{k+j}}_{Q_0}^2+\norm{x_N-r_{k+N}}_{S}^2
+\item \textbf{Bộ điều khiển.} LQR (Mục 6); \textbf{MPC tuyến tính}
+$N=20$ (bằng horizon của teacher): mô hình $x_{j+1}=A_dx_j+B_d(u_j-u_h)$, chi phí $\sum_{j=1}^{N-1}\norm{x_j-r_{k+j}}_{Q_0}^2+\norm{x_N-r_{k+N}}_{S}^2
 +\sum_{j=0}^{N-1}\norm{u_j-u_h}_{R_0}^2$, chặn hộp đầu vào, QP thu gọn giải bằng active-set KWIK có warm start;
 \textbf{Teacher} của chain (trọng số $a=\mu$, kịch bản theo seed, \texttt{SQP})
 được cho biết \emph{đúng} lực gió đo thực tại mỗi bước --- \textbf{cận trên (oracle)}, không triển khai được;
@@ -839,7 +838,7 @@ $F=(m/2.53)(c_1+c_2\norm{w})\,w$ với $(c_1,c_2)$ khớp bình phương tối t
 độ trung bình, RMS gia số lệnh đã chuẩn hoá, thời gian tính mỗi bước (trung vị/p99/max), $\alpha$ trung bình, tỉ
 lệ hội tụ SQP của teacher, số lần đặt lại do phân kỳ; bảng tổng hợp
 (\texttt{tools/\allowbreak eval/\allowbreak summarize\_\allowbreak final\_\allowbreak eval.py}) đếm thêm số chuyến
-mỗi bộ thắng LQR và thắng LQI. Thời gian của teacher gồm cả tính tham chiếu nhất quán với gió. Một chuyến
+mỗi bộ thắng LQR. Thời gian của teacher gồm cả tính tham chiếu nhất quán với gió. Một chuyến
 \emph{hoàn thành} khi không có lần đặt lại nào và sai số chưa lần nào chạm mức chặn $5$ m. Lưu thêm quỹ đạo đầy
 đủ của một chuyến đại diện cho mỗi họ để vẽ hình.
 \end{itemize}

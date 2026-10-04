@@ -1,6 +1,6 @@
 name: D1 final evaluation (real wind, train / OOD)
 
-# LQR, LQI, linear MPC (chain-independent, job "baseline") and, per SAC chain, the
+# LQR, linear MPC with N = 20 (chain-independent, job "baseline") and, per SAC chain, the
 # SAC-NMPC teacher (acados; ORACLE: told the exact current wind force, not deployable)
 # and the proposed controller P (DAgger student + confidences; does not know the wind), all flown on
 # the same flights: real wind (Neural-Fly force + SWUF-3D field wind) x train / OOD
@@ -26,9 +26,9 @@ on:
         default: "Teacher,P"
         type: string
       base_ctrls:
-        description: "Chain-independent controllers: LQR,LQI,MPC (empty = skip baseline job)"
+        description: "Chain-independent controllers: LQR,MPC (empty = skip baseline job)"
         required: false
-        default: "LQR,LQI,MPC"
+        default: "LQR,MPC"
         type: string
       solver:
         description: "Teacher NMPC solver (training used SQP)"

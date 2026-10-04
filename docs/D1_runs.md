@@ -14,7 +14,10 @@ so that they can be inspected if needed.
   SAC path these differ from `a707c1e` only in comments.
 - DAgger and sweep code: commit `7f59e98` (teacher/LQR reference on the validation flights,
   sweep CSV); `3dd161f` differs from it only in a README line.
-- Final test at SAC iteration 100: tag `d1-final-iter100` (= `3dd161f`).
+- Final test at SAC iteration 100: DAgger on tag `d1-final-iter100` (= `3dd161f`); final
+  evaluation on tag `d1-final-eval-iter100`, which differs from it in the D1 code only in
+  the evaluation script, its workflow and its summary (LQI removed, linear MPC N = 20 instead of 5) and
+  in comments, plus the move of unused files to `legacy/`.
 - Solver: official release acados v0.6.0 in every run listed here.
 
 ## SAC chains
@@ -33,14 +36,17 @@ every milestone `checkpoint_seed<s>_iter<NNNN>.mat` up to its last iteration.
 
 | Chain | Run | Resumes SAC run |
 |---|---|---|
-| Bryson base | dispatched after 37187904877 ends (tag `d1-final-iter100`) | 37187904877 |
+| Bryson base | 37190192312 | 37187904877 |
 | Random base | 37186800408 | 37171580144 |
+
+Run 37190195267 is an accidental duplicate of the Bryson DAgger dispatched on `main`; it
+was cancelled and is not used.
 
 ## Final evaluation at SAC iteration 100
 
-`d1-final-eval.yml` on tag `d1-final-iter100`, both chains with suffix `_iter0100` (run =
-the DAgger runs above), conditions `train` and `ood`, controllers LQR, LQI, MPC, Teacher, P:
-dispatched after both DAgger runs end.
+`d1-final-eval.yml` on tag `d1-final-eval-iter100`, both chains with suffix `_iter0100`
+(run = the DAgger runs above), conditions `train` and `ood`, controllers LQR, MPC
+(N = 20), Teacher, P: dispatched after both DAgger runs end.
 
 ## Performance versus SAC iteration (DAgger sweep)
 

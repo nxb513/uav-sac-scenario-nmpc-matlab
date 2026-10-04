@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Summarize experiments/d1_final_eval.m CSVs into a Markdown report.
 
-Controller label: baseline controllers keep their name (LQR, LQI, MPC); chain-specific
+Controller label: baseline controllers keep their name (LQR, MPC); chain-specific
 ones are tagged with the chain seed suffix and checkpoint iteration, e.g. Teacher@201(i500).
 Teacher = SAC-NMPC told the exact current wind force (oracle, not deployable); P = the
-deployed proposed controller (LQR base + gated surrogate, does not know the wind).
+deployed proposed controller (LQR base + gated linear student, does not know the wind).
 
 Flights always run their full length (common flight rules of the pipeline): a divergence
 restarts the plant on the reference and is counted in `restarts`. Position errors are
@@ -45,7 +45,7 @@ def main(folder):
         if d.empty:
             continue
         print(f"## Condition `{cond}` ({d['flight'].nunique()} flights)\n")
-        refs = {r: d[(d['label'] == r) & d['done']].set_index('flight')['pos_rmse'] for r in ('LQR', 'LQI')}
+        refs = {r: d[(d['label'] == r) & d['done']].set_index('flight')['pos_rmse'] for r in ('LQR',)}
 
         def wins(lab, ok, ref):
             b = refs[ref]
@@ -63,16 +63,16 @@ def main(folder):
                               du_med=ok['du_rms'].median(), t_med=x['t_med_us'].median(),
                               t_p99=x['t_p99_us'].median(), alpha=ok['alpha_mean'].mean(),
                               conv=x['teacher_conv'].mean(),
-                              wLQR=wins(lab, ok, 'LQR'), wLQI=wins(lab, ok, 'LQI')))
+                              wLQR=wins(lab, ok, 'LQR')))
         st = pd.DataFrame(stats).sort_values(['done', 'pos_med'], ascending=[False, True])
         print('| controller | completed | restarts | pos RMSE med (completed) [m] | pos RMSE mean (completed) '
               '| pos RMSE med (all, capped) | max pos err med | vel RMSE med | du RMS med | t/step med [us] '
-              '| t/step p99 [us] | better than LQR | better than LQI | mean alpha | NMPC conv |')
-        print('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|')
+              '| t/step p99 [us] | better than LQR | mean alpha | NMPC conv |')
+        print('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|')
         for _, r in st.iterrows():
             print(f"| {r['label']} | {r['done']}/{r['n']} | {r['restarts']} | {fmt(r['pos_med'])} | "
                   f"{fmt(r['pos_mean'])} | {fmt(r['pos_all'])} | {fmt(r['pmax_med'], 3)} | {fmt(r['vel_med'])} | "
-                  f"{fmt(r['du_med'])} | {fmt(r['t_med'], 1)} | {fmt(r['t_p99'], 1)} | {r['wLQR']} | {r['wLQI']} | "
+                  f"{fmt(r['du_med'])} | {fmt(r['t_med'], 1)} | {fmt(r['t_p99'], 1)} | {r['wLQR']} | "
                   f"{fmt(r['alpha'], 3)} | {fmt(r['conv'], 3)} |")
         print('\nPer family: pos RMSE median over completed flights (not completed)\n')
         print('| controller | ' + ' | '.join(FAMS) + ' |')

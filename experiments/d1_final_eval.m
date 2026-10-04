@@ -4,9 +4,7 @@ function d1_final_eval()
 % Controllers (D1_CTRLS, comma list). Every controller knows only the NOMINAL model;
 % the true plant is a repo LHS sample it does not know.
 %   LQR      u = sat(uh - K e)                                  (Bryson, nominal)
-%   LQI      u = sat(uh - Kx e - KI z), z = int(p - p_ref) dt   (joint dlqr, nominal,
-%            clamping anti-windup: no integration on saturated steps)
-%   MPC      standard linear MPC, N = D1_MPC_N (5): hover-linear model, Bryson Q,R,
+%   MPC      standard linear MPC, N = D1_MPC_N (20, = teacher N): hover-linear model, Bryson Q,R,
 %            terminal DARE P, input box constraints, KWIK active-set QP (warm start)
 %   Teacher  SAC-NMPC teacher of the chain (ORACLE): scenario NMPC (acados, M=5 scenarios
 %            from the chain seed, N=20, Nc=5, D1_SOLVER) with Q,R = d1_action_to_QR(mu),
@@ -34,9 +32,8 @@ function d1_final_eval()
 cfg = d1_config(); rng(cfg.seed, 'twister');
 scen = d1_sample_scenarios(cfg);              % teacher scenarios: first draw after rng(seed)
 lqr = d1_build_lqr(cfg);
-[KI, KxLQI] = lqi_setup(cfg, lqr);
-ctrls = strtrim(strsplit(d1_getenv_str('D1_CTRLS', 'LQR,LQI,MPC'), ','));
-kindOf = containers.Map({'LQR','LQI','MPC','Teacher','P'}, {'L','Q','M','T','P'});
+ctrls = strtrim(strsplit(d1_getenv_str('D1_CTRLS', 'LQR,MPC'), ','));
+kindOf = containers.Map({'LQR','MPC','Teacher','P'}, {'L','M','T','P'});
 assert(all(isKey(kindOf, ctrls)), 'd1_final_eval:ctrl', 'unknown controller in D1_CTRLS');
 tag = d1_getenv_str('D1_TAG', 'base'); cond = d1_getenv_str('D1_COND', 'train');
 stu = []; conf = []; teacher = []; mp = []; ckIter = NaN;
@@ -58,7 +55,7 @@ if any(strcmp(ctrls, 'Teacher'))
     fprintf('TEACHER solver=%s diag(Q)=[%s] diag(R)=[%s]\n', cfg.solverType, ...
         num2str(diag(Qt).', '%.3g '), num2str(diag(Rt).', '%.3g '));
 end
-if any(strcmp(ctrls, 'MPC')), mp = lmpc_setup(cfg, lqr, d1_getenv_num('D1_MPC_N', 5)); end
+if any(strcmp(ctrls, 'MPC')), mp = lmpc_setup(cfg, lqr, d1_getenv_num('D1_MPC_N', 20)); end
 F = build_final_flights(cfg, cond);
 sh = sscanf(d1_getenv_str('D1_SHARD', '1/1'), '%d/%d');
 sel = find(mod((1:numel(F)) - 1, sh(2)) == sh(1) - 1);
@@ -68,7 +65,7 @@ rows = {}; TR = struct('flight',{},'family',{},'id',{},'ctrl',{},'X',{},'U',{},'
 for i = sel
     f = F(i); ln = sprintf('FL %4d %-5s %-50s', i, cond, f.id);
     for c = 1:numel(ctrls)
-        [X, U, tm, aux, conv, nDiv] = fly_one(kindOf(ctrls{c}), f, cfg, lqr, stu, conf, KI, KxLQI, mp, teacher);
+        [X, U, tm, aux, conv, nDiv] = fly_one(kindOf(ctrls{c}), f, cfg, lqr, stu, conf, mp, teacher);
         Xr = f.Xref(:, 2:size(X,2)+1); m = metr(X, U, Xr, tm, cfg, nDiv);
         a = mean(aux(isfinite(aux))); cv = mean(conv(isfinite(conv)));
         ln = [ln sprintf(' | %s %s pos=%.4f vel=%.4f pmax=%.3f restarts=%d tmed=%.1f aux=%.2f', ...
@@ -174,15 +171,15 @@ ds = @(t, x, u, th) struct('force', [Gx(t); Gy(t); Gz(t)], 'torque', zeros(3,1))
 end
 
 % ---- closed-loop flight ---------------------------------------------------------
-function [X, U, tm, aux, conv, nDiv] = fly_one(kind, f, cfg, lqr, stu, conf, KI, KxLQI, mp, teacher)
+function [X, U, tm, aux, conv, nDiv] = fly_one(kind, f, cfg, lqr, stu, conf, mp, teacher)
 % One flight with the COMMON flight rules of the training pipeline: real time (k-1)*Ts,
 % d1_plant_step, d1_case_len steps; after a divergence the plant restarts on the
-% reference and the controller's internal state (student memory, u_prev, integrator z, solver /
-% active set) is reset. Diverged steps stay NaN in X; nDiv counts restarts. tm = time of
+% reference and the controller's internal state (student memory, u_prev, solver / active set)
+% is reset. Diverged steps stay NaN in X; nDiv counts restarts. tm = time of
 % the control computation only (for the teacher incl. its wind-consistent target).
 Ts = cfg.Ts; uh = cfg.uh; Xref = f.Xref; T = d1_case_len(Xref, cfg);
 X = nan(12,T); U = nan(4,T); tm = nan(1,T); aux = nan(1,T); conv = nan(1,T); nDiv = 0;
-x = Xref(:,1); s = d1_student_init(x, cfg); zI = zeros(3,1); uprev = uh;
+x = Xref(:,1); s = d1_student_init(x, cfg); uprev = uh;
 if kind == 'M', ws.iA = false(size(mp.bin)); end
 if kind == 'T', d1_teacher_reset(teacher, Xref, 1, cfg); end     % clean solver per flight
 for k = 1:T
@@ -193,9 +190,6 @@ for k = 1:T
     switch kind
         case 'L'
             u = d1_sat(uh - lqr.K*e, cfg);
-        case 'Q'
-            uu = uh - KxLQI*e - KI*zI; u = d1_sat(uu, cfg);
-            if all(u == uu), zI = zI + Ts*e(1:3); end            % clamping anti-windup
         case 'M'
             [u, ws, nit] = lmpc_solve(mp, x, Xref(:, k+1:k+mp.N), ws); aux(k) = nit;
         case 'T'   % identical to training: d1_teacher_step (reset after an unusable solve)
@@ -209,7 +203,7 @@ for k = 1:T
     [xNew, div] = d1_plant_step(t, x, u, Ts, f.theta, f.ds);
     if div
         nDiv = nDiv + 1; x = Xref(:,k+1);
-        s = d1_student_init(x, cfg); zI = zeros(3,1); uprev = uh;
+        s = d1_student_init(x, cfg); uprev = uh;
         if kind == 'M', ws.iA = false(size(mp.bin)); end
         if kind == 'T', d1_teacher_reset(teacher, Xref, k+1, cfg); end
     else
@@ -217,15 +211,6 @@ for k = 1:T
         x = xNew; X(:,k) = x;
     end
 end
-end
-
-function [KI, KxLQI] = lqi_setup(cfg, lqr)
-% LQI on the nominal hover model: z_{k+1} = z_k + Ts*C*e_k (C = position rows),
-% Q_aug = blkdiag(Q0, I/z_allow^2), z_allow = 0.10 m (Bryson e_allow_pos) x 1 s.
-Ts = cfg.Ts; C = [eye(3), zeros(3,9)];
-Aa = [lqr.Ad, zeros(12,3); Ts*C, eye(3)]; Ba = [lqr.Bd; zeros(3,4)];
-zAllow = 0.10 * 1.0; Qa = blkdiag(lqr.Q, eye(3)/zAllow^2);
-Ka = dlqr(Aa, Ba, Qa, lqr.R); KI = Ka(:, 13:15); KxLQI = Ka(:, 1:12);
 end
 
 % ---- standard linear MPC (condensed, box-constrained QP) ------------------------

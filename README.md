@@ -48,7 +48,7 @@ linear student + DAgger; it is now implemented and merged into `docs/D1_method`.
 | File | Role |
 |---|---|
 | `experiments/run_d1_joint_pipeline.m` | SAC phase (teacher tuning), DAgger phase (`D1_DAGGER=1`), diagnostic modes |
-| `experiments/d1_final_eval.m` | Final evaluation: LQR, LQI, linear MPC (N = 5), Teacher (oracle), P under measured wind |
+| `experiments/d1_final_eval.m` | Final evaluation: LQR, linear MPC (N = 20), Teacher (oracle), P under measured wind |
 | `src/joint/d1_*.m` | The single shared definitions used by both scripts (see `src/joint/README.md`) |
 | `src/joint/d1_dagger_run.m` | DAgger loop, teacher/LQR reference on the validation flights, selection, confidences, student file, sweep CSV line |
 | `src/joint/d1_teacher_build_solver.m` | acados scenario-NMPC teacher with the wind-force parameter |
@@ -93,8 +93,9 @@ call (static call graph). Older scripts, including the older D1-stage scripts
     two chains share the exploration noise, case draws and winds (the reference-bank build
     reseeds the global random stream per case), so they form a paired comparison; the seed
     sets only the teacher's model scenarios and the random base.
-  - **Final test at SAC iteration 100:** both chains, DAgger (`ckpt_suffix=_iter0100`) and
-    the final evaluation run on tag `d1-final-iter100`; run ids in `docs/D1_runs.md`.
+  - **Final test at SAC iteration 100:** both chains; DAgger (`ckpt_suffix=_iter0100`) runs
+    on tag `d1-final-iter100`, the final evaluation (LQR, MPC, Teacher, P) on tag
+    `d1-final-eval-iter100`; run ids in `docs/D1_runs.md`.
   - **Artifact per seed:** `d1-joint-ckpt-seed<seed>-<run_id>`. It holds
     `checkpoint_seed<s>.mat` (saved after every iteration) and the milestone copies
     `checkpoint_seed<s>_iter<NNNN>.mat` (every iteration with `ckpt_every=1`). The SAC
@@ -119,7 +120,7 @@ call (static call graph). Older scripts, including the older D1-stage scripts
 - **D1 final evaluation** (`.github/workflows/d1-final-eval.yml`).
   - **Inputs:** `chains` (JSON list of `{seed, rqr, run, suffix}`, where `run` is the
     DAgger run, whose artifact holds both the SAC checkpoint and the student file), `conds`
-    (`train`, `ood`), `chain_ctrls` (`Teacher,P`) and `base_ctrls` (`LQR,LQI,MPC`).
+    (`train`, `ood`), `chain_ctrls` (`Teacher,P`) and `base_ctrls` (`LQR,MPC`).
   - **Outputs:** CSVs, representative trajectories and a Markdown summary.
 
 All D1 workflows build the official release acados v0.6.0 (commit
