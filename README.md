@@ -122,6 +122,9 @@ call (static call graph). Older scripts, including the older D1-stage scripts
     DAgger run, whose artifact holds both the SAC checkpoint and the student file), `conds`
     (`train`, `ood`), `chain_ctrls` (`Teacher,P`) and `base_ctrls` (`LQR,MPC`).
   - **Outputs:** CSVs, representative trajectories and a Markdown summary.
+  - **D1 final evaluation after a run ends** (`d1-final-eval-after.yml`): waits on GitHub
+    until a given run (for example a DAgger run) has succeeded, then dispatches
+    `d1-final-eval.yml` with the given inputs.
 
 All D1 workflows build the official release acados v0.6.0 (commit
 `503364817c872d474ab5bed219c26760ac267769`, unmodified; CasADi 3.6.7), so every job of every

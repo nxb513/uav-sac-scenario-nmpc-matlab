@@ -53,7 +53,7 @@ over the CSVs of both runs.
 | Run | Controllers |
 |---|---|
 | 37191803718 | LQR, MPC; Teacher and P of the random-base chain |
-| dispatched after 37190192312 ends | Teacher and P of the Bryson-base chain (`base_ctrls` empty) |
+| dispatched by `d1-final-eval-after.yml` when 37190192312 ends | Teacher and P of the Bryson-base chain (`base_ctrls` empty) |
 
 ## Performance versus SAC iteration (DAgger sweep)
 

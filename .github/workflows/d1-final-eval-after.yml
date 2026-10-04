@@ -1,0 +1,67 @@
+name: D1 final evaluation after a run ends
+
+# Waits on GitHub until run `wait_run` (for example the DAgger run whose artifact holds the
+# student) has completed, then dispatches d1-final-eval.yml on `ref` with the given inputs,
+# so no local machine has to stay on. Nothing is dispatched if the awaited run did not succeed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      wait_run:
+        description: "Run id to wait for"
+        required: true
+        type: string
+      ref:
+        description: "Branch or tag for d1-final-eval.yml"
+        required: true
+        type: string
+      chains:
+        description: "chains input of d1-final-eval.yml"
+        required: true
+        type: string
+      conds:
+        required: false
+        default: '["train","ood"]'
+        type: string
+      chain_ctrls:
+        required: false
+        default: "Teacher,P"
+        type: string
+      base_ctrls:
+        description: "base_ctrls input of d1-final-eval.yml (empty = skip baseline job)"
+        required: false
+        default: ""
+        type: string
+      solver:
+        required: false
+        default: "SQP"
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  wait-and-dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      WAIT_RUN: ${{ inputs.wait_run }}
+      REF: ${{ inputs.ref }}
+      CHAINS: ${{ inputs.chains }}
+      CONDS: ${{ inputs.conds }}
+      CHAIN_CTRLS: ${{ inputs.chain_ctrls }}
+      BASE_CTRLS: ${{ inputs.base_ctrls }}
+      SOLVER: ${{ inputs.solver }}
+    steps:
+      - name: Wait, then dispatch the final evaluation
+        run: |
+          until [ "$(gh run view "$WAIT_RUN" -R "$REPO" --json status --jq .status)" = "completed" ]; do sleep 60; done
+          c=$(gh run view "$WAIT_RUN" -R "$REPO" --json conclusion --jq .conclusion)
+          echo "run $WAIT_RUN: $c"
+          [ "$c" = "success" ] || { echo "awaited run did not succeed; nothing dispatched"; exit 1; }
+          gh workflow run d1-final-eval.yml -R "$REPO" --ref "$REF" -f chains="$CHAINS" -f conds="$CONDS" \
+            -f chain_ctrls="$CHAIN_CTRLS" -f base_ctrls="$BASE_CTRLS" -f solver="$SOLVER"
+          echo "d1-final-eval.yml dispatched on $REF"
