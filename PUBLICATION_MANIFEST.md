@@ -5,7 +5,8 @@
 The public package contains, for method D1 (`docs/D1_method.pdf`):
 
 - the pipeline `experiments/run_d1_joint_pipeline.m` (SAC phase, DAgger phase,
-  diagnostic modes) and the final evaluation `experiments/d1_final_eval.m`;
+  diagnostic modes), the final evaluation `experiments/d1_final_eval.m` and the local
+  computation-time run `experiments/d1_local_timing.m`;
 - the shared D1 definitions `src/joint/d1_*.m` (configuration, flight rules, acados
   teacher with wind parameter, parallel teacher pool, teacher target/step, linear student features, DAgger,
   ridge fit, stability check, confidences, deployed blend) and the plant/reference

@@ -8,8 +8,8 @@ flight per family: hardest level, plant 1, first wind; tag 'base' = LQR/MPC, tag
   traj_<cond>_c<seed>.png   3D flight paths of the reference, LQR, MPC, Teacher and P
                             (one column per family) and their position error over time;
   alpha_<cond>_c<seed>.png  where the student acts in P: the 3D path of P coloured by the
-                            recorded weight alpha = c_S * g_L(c_LQR) (capped by the
-                            contraction bound; 0 = pure LQR), alpha over time, and the
+                            recorded weight alpha = c_S * g_L(c_LQR) (D1_ALPHA_SAFE is off in
+                            the final evaluation; 0 = pure LQR), alpha over time, and the
                             position error of LQR and P over time.
 
 Entries found in several input folders (for example the baseline flown in two runs) are

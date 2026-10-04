@@ -16,8 +16,11 @@ linear student + DAgger; it is now implemented and merged into `docs/D1_method`.
 - **Deployed controller (P):** `u = sat( sat(u_LQR) + alpha * W*phi )`,
   `alpha = c_S * g_L(c_LQR)`, `g_L = clip((c_high - c_LQR)/(c_high - c_low), 0, 1)`,
   `c_low = 0.3`, `c_high = 0.7`. `u_LQR = u_h - K (x - x_ref)` is a Bryson LQR on the
-  nominal hover model. No optimization is solved online; the cost per step is of the same
-  order as the LQR (108 multiply-adds for `W*phi`, 48 for the LQR).
+  nominal hover model. No optimization is solved online. Per control step, as counted in
+  `docs/D1_method.pdf` (computation cost): P 254 multiplications, 46 divisions, 327
+  additions and 33 elementary functions; LQR 48 multiplications and 60 additions.
+  Computation time is not taken from CI runners (shared VMs, CPU unspecified); it is
+  measured on one documented machine with `experiments/d1_local_timing.m`.
 - **Teacher (training only, and oracle in evaluation):** SAC-tuned scenario NMPC
   (acados, M = 5 model scenarios, N = 20, Nc = 5, SQP with at most 50 SQP and 100 QP
   iterations per solve). SAC's action is the log10 of six multipliers of the base Q, R
@@ -49,6 +52,7 @@ linear student + DAgger; it is now implemented and merged into `docs/D1_method`.
 |---|---|
 | `experiments/run_d1_joint_pipeline.m` | SAC phase (teacher tuning), DAgger phase (`D1_DAGGER=1`), diagnostic modes |
 | `experiments/d1_final_eval.m` | Final evaluation: LQR, linear MPC (N = 20), Teacher (oracle), P under measured wind |
+| `experiments/d1_local_timing.m` | Computation time of LQR, MPC and P on one documented machine (same flights and code as the final evaluation, one thread) |
 | `src/joint/d1_*.m` | The single shared definitions used by both scripts (see `src/joint/README.md`) |
 | `src/joint/d1_dagger_run.m` | DAgger loop, teacher/LQR reference on the validation flights, selection, confidences, student file, sweep CSV line |
 | `src/joint/d1_teacher_build_solver.m` | acados scenario-NMPC teacher with the wind-force parameter |

@@ -63,7 +63,7 @@ chưng cất bằng DAgger từ NMPC-scenario, với tin cậy $\cS$ và $\cL$\p
 \begin{minipage}{0.85\textwidth}\centering
 Bản ghi rõ: mô hình, tham số danh nghĩa, điều kiện bất định và nhiễu, tập quỹ đạo (họ, tốc độ,
 gia tốc), thiết kế LQR (Bryson), teacher NMPC-scenario $M{=}5$ được biết gió (thông tin đặc quyền), SAC
-tinh chỉnh $Q,R$ không giới hạn phạm vi (gốc Bryson; chain đối chứng gốc ngẫu nhiên), học trò tuyến tính có chi phí ngang LQR học bằng DAgger, định nghĩa
+tinh chỉnh $Q,R$ không giới hạn phạm vi (gốc Bryson; chain đối chứng gốc ngẫu nhiên), học trò tuyến tính (vài trăm phép toán mỗi bước) học bằng DAgger, định nghĩa
 $\cS/\cL$, bộ điều khiển đề xuất (trộn theo tin cậy), phân tích co rút Lyapunov (điều kiện đủ), môi trường
 huấn luyện có gió ngẫu nhiên, và giao thức đánh giá. Mọi mô tả khớp với mã nguồn hiện tại: các định nghĩa
 dùng chung nằm trong \texttt{src/joint/d1\_*.m}, được cả pipeline huấn luyện
@@ -78,7 +78,7 @@ dùng chung nằm trong \texttt{src/joint/d1\_*.m}, được cả pipeline huấ
 % ===================== 0 =====================
 \section{Tóm tắt phương pháp}
 Mục tiêu: xây một \textbf{bộ điều khiển triển khai} cho UAV quadrotor \textbf{không cần giải tối ưu
-trực tuyến} và có \textbf{chi phí tính toán ngang LQR}, nhưng vẫn thừa hưởng chất lượng của một bộ
+trực tuyến} và chỉ tốn \textbf{vài trăm phép toán mỗi bước} (đếm cụ thể ở Mục~\ref{sec:cost}), nhưng vẫn thừa hưởng chất lượng của một bộ
 \textbf{NMPC-scenario} mạnh, lấy \textbf{LQR làm nền} (phần dư chỉ bổ sung có kiểm soát; phân tích co rút là
 \emph{điều kiện đủ có điều kiện}, không phải bảo chứng ổn định cho luật lai --- xem Mục 12). Kiến trúc gồm
 ba thành phần và một luật hợp nhất:
@@ -93,7 +93,7 @@ Teacher không được triển khai.
 \item \textbf{Học trò tuyến tính} — $\Delta u=W\varphi$ với 27 đặc trưng rẻ $\varphi$ (sai số trạng thái, lực ngoài
 ước lượng $\hat F$, feedforward và nhìn trước của tham chiếu), \textbf{không biết gió} (dùng $\hat F$ ước lượng
 từ bước trước). $W$ được học bằng \textbf{DAgger} (Ross et al. 2011) với teacher \emph{đóng băng} sau SAC,
-mỗi vòng giải \textbf{ridge dạng đóng} (Mục 9). Chi phí $\approx108$ phép nhân-cộng, cùng bậc với LQR (48).
+mỗi vòng giải \textbf{ridge dạng đóng} (Mục 9). Chi phí mỗi bước của P: Mục~\ref{sec:cost}.
 \item \textbf{Tin cậy $\cS,\cL$} — $\cS$ là \emph{điểm chất lượng bám vị trí gần đây} của học trò (RMS sai số 20
 bước vừa qua, chuẩn hoá về $[0,1]$), dự đoán bằng logistic trên đặc trưng rẻ; $\cL$ là \emph{xác suất co rút}
 của LQR (dựa trên hàm Lyapunov $V$).
@@ -521,8 +521,8 @@ KHÔNG bảo đảm tổng quát hoá.}
 $N{=}20$) để đón trước khúc cua.
 \end{itemize}
 \textbf{Không có hằng số tự do:} tại hover không gió $\varphi=0$ và teacher trùng LQR ($\Delta u^*=0$), nên
-$\Delta u(0)=0$ phải đúng; bias sẽ tạo lệch tĩnh giả. \textbf{Chi phí} mỗi bước: $W\varphi$ $108$ phép nhân-cộng,
-$\hat F$ 12 hàm lượng giác $+\approx30$ phép tính, hai logistic của cổng; LQR: 48 phép nhân-cộng.
+$\Delta u(0)=0$ phải đúng; bias sẽ tạo lệch tĩnh giả. \textbf{Chi phí} mỗi bước: $W\varphi$ $108$ phép nhân và
+$104$ phép cộng; toàn bộ P (đặc trưng, $\hat F$, hai logistic của cổng, trộn) đếm ở Mục~\ref{sec:cost}.
 
 \textbf{Lực ngoài ước lượng} (\texttt{d1\_fhat}), từ $m\dot v=\alpha_T T R(\eta)e_3-mg e_3-D_v v+F$ tích phân
 hình thang trên một bước (lệnh $T_{k-1}$ giữ bậc 0), tham số danh nghĩa:
@@ -835,13 +835,53 @@ SWUF-3D (Zenodo 17700905): gió 3D đo bằng sonic ngoài trời; quy ra lực
 $F=(m/2.53)(c_1+c_2\norm{w})\,w$ với $(c_1,c_2)$ khớp bình phương tối thiểu trên lực trung bình của Neural-Fly
 ở các mức gió ổn định; lấy $49$ s đầu. Dữ liệu được tải trong job CI, không lưu vào repo hay artifact.
 \item \textbf{Chỉ số} (mỗi chuyến $\times$ bộ điều khiển): RMSE và max sai số vị trí, RMSE vận tốc, tỉ số tốc
-độ trung bình, RMS gia số lệnh đã chuẩn hoá, thời gian tính mỗi bước (trung vị/p99/max), $\alpha$ trung bình, tỉ
+độ trung bình, RMS gia số lệnh đã chuẩn hoá, thời gian tính mỗi bước (trung vị/p99/max; ghi trong CSV nhưng
+\textbf{không} báo cáo từ job CI, xem Mục~\ref{sec:cost}), $\alpha$ trung bình, tỉ
 lệ hội tụ SQP của teacher, số lần đặt lại do phân kỳ; bảng tổng hợp
 (\texttt{tools/\allowbreak eval/\allowbreak summarize\_\allowbreak final\_\allowbreak eval.py}) đếm thêm số chuyến
-mỗi bộ thắng LQR. Thời gian của teacher gồm cả tính tham chiếu nhất quán với gió. Một chuyến
+mỗi bộ thắng LQR. Một chuyến
 \emph{hoàn thành} khi không có lần đặt lại nào và sai số chưa lần nào chạm mức chặn $5$ m. Lưu thêm quỹ đạo đầy
 đủ của một chuyến đại diện cho mỗi họ để vẽ hình.
 \end{itemize}
+
+\subsection{Chi phí tính toán}\label{sec:cost}
+Thời gian đo trong job CI \textbf{không} được báo cáo: runner GitHub là máy ảo dùng chung, loại CPU không được
+chỉ định. Theo cách các công trình cùng loại báo cáo (thời gian trên một máy cố định có ghi rõ, kèm số phép
+toán không phụ thuộc phần cứng), chi phí được báo cáo bằng hai cách.
+
+\textbf{(a) Số phép toán mỗi bước điều khiển}, đếm từ mã đúng như được chạy trong đánh giá cuối
+(\texttt{fly\_one} của \texttt{d1\_final\_eval}, gồm cả $e=x-x_{\mathrm{ref}}$; \texttt{D1\_ALPHA\_SAFE} tắt):
+\begin{center}\small
+\begin{tabular}{lrrrll}
+\toprule
+Bộ & nhân & chia & cộng/trừ & hàm sơ cấp & so sánh\\
+\midrule
+LQR & 48 & 0 & 60 & -- & 8\\
+P & 254 & 46 & 327 & 12 sin/cos, 10 căn, 2 exp, 9 mod & 49\\
+MPC ($N=20$) & 22080 & 0 & 22016 & -- & 8\\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item P $=$ đặc trưng $\varphi$ ($\hat F$: 25 nhân, 9 chia, 22 cộng, 12 sin/cos), LQR nền, $W\varphi$ (108 nhân,
+104 cộng), hai logistic của cổng (18 và 16 đặc trưng), $g_L$, trộn và hai lần bão hoà. Đếm như mã viết, kể cả hằng số được tính lại mỗi bước (như $2\pi$, $mg$); $e$ và
+\texttt{d1\_conf\_feature}$(e)$ được tính hai lần.
+\item MPC: số trên là phần tường minh $f=G\,(\Phi x_0-r)$ ($\Phi\in\R^{240\times12}$, $G\in\R^{80\times240}$);
+cộng thêm QP hộp giải bằng active-set KWIK (\texttt{mpcActiveSetSolver}; 80 biến, 160 ràng buộc, nghịch đảo
+nhân tử Cholesky tính trước), chi phí phụ thuộc số vòng lặp active-set mỗi bước (ghi trong CSV).
+\item Teacher (cận trên, không triển khai): không đếm dạng đóng; mỗi bước giải bằng acados SQP một bài toán
+64 trạng thái ($5\times12$ cộng $u_{\mathrm{prev}}$), 4 đầu vào, $N=20$, $N_c=5$, tối đa 50 vòng SQP và 100
+vòng QP (HPIPM), cộng tính tham chiếu nhất quán với gió.
+\end{itemize}
+
+\textbf{(b) Thời gian trên một máy cố định} (\texttt{experiments/d1\_local\_timing.m}): chạy lại đúng
+\texttt{d1\_final\_eval} (cùng chuyến bay, cùng mã, cùng \texttt{tic/toc} chỉ quanh phần tính lệnh) cho LQR,
+MPC và P của mỗi chain, cả hai điều kiện, với 1 luồng tính (\texttt{maxNumCompThreads(1)}), tiến trình ghim
+vào một bộ xử lý logic; ghi lại CPU, hệ điều hành, phiên bản MATLAB và nguồn điện
+(\texttt{machine.txt}). Cả ba bộ đều chạy bằng MATLAB thông dịch nên cùng một kiểu hiện thực. Báo cáo: trung vị
+qua các chuyến của trung vị và p99 mỗi chuyến, và giá trị lớn nhất (\texttt{summarize\_final\_eval.py
+--timing}). Teacher không được đo thời gian ở đây (dùng acados, không cài trên máy đo); máy, số liệu và run ghi
+ở \texttt{docs/D1\_runs.md}.
 
 % ===================== 13 =====================
 \section{Bảng tham số cố định}
