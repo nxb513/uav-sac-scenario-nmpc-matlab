@@ -2,8 +2,10 @@
 
 The active method of this repository is **D1**. Its complete description (Vietnamese)
 is `docs/D1_method.pdf` (source `docs/D1_method.tex`); the document is kept in sync with
-the code, and the code is authoritative. `docs/D1_student_design.pdf` is the approved design of the
-linear student + DAgger; it is now implemented and merged into `docs/D1_method`.
+the code, and the code is authoritative. `docs/D1_student_design.pdf` is the design note of the
+linear student + DAgger (approved 2026-10-02, implemented, and rewritten to match the code;
+its first box lists where the code differs from the approved proposal); `docs/D1_method`
+contains the same content within the full method.
 
 - **Official runs:** `docs/D1_runs.md` lists the GitHub Actions runs of the current code;
   every other run in the Actions history is a draft or superseded (kept, not deleted).

@@ -530,8 +530,8 @@ hình thang trên một bước (lệnh $T_{k-1}$ giữ bậc 0), tham số danh
 \hat F_k=\tfrac{m}{T_s}(v_k-v_{k-1})+mg\,e_3-\alpha_T T_{k-1}\tfrac12\big(R(\eta_{k-1})+R(\eta_k)\big)e_3
 +\tfrac12D_v(v_{k-1}+v_k),
 \]
-$\hat F=0$ ở bước đầu và sau mỗi lần đặt lại do phân kỳ. Kiểm tra (LQR, 5 quỹ đạo, gió huấn luyện, so với lực
-trung bình thật trong bước): sai số tương đối trung vị $1.0\%$, sai số tuyệt đối p95 $0.031$ N (lực điển hình
+$\hat F=0$ ở bước đầu và sau mỗi lần đặt lại do phân kỳ. Kiểm tra một lần khi thiết kế (LQR, 5 quỹ đạo, gió huấn
+luyện, so với lực trung bình thật trong bước; script kiểm tra không nằm trong repo): sai số tương đối trung vị $1.0\%$, sai số tuyệt đối p95 $0.031$ N (lực điển hình
 $\approx1$ N). Chỉ phần tịnh tiến: khi huấn luyện gió không tạo mô-men.
 
 \subsection{DAgger (Ross, Gordon, Bagnell 2011, Thuật toán 3.1; \texttt{d1\_dagger\_run})}

@@ -19,30 +19,35 @@
 \setlength{\parskip}{0.35em}\setlength{\parindent}{0pt}
 \begin{document}
 {\color{navy}\LARGE\bfseries Thiết kế: học trò tuyến tính $+$ DAgger cho D1}\\[1mm]
-{\itshape Bản đề xuất để duyệt trước khi sửa code. Mọi thứ không nhắc tới ở đây giữ nguyên như D1 hiện tại.}\\[1mm]
-\fbox{\parbox{0.96\textwidth}{\small\textbf{Trạng thái (2026-10-03).} Thiết kế đã được duyệt, \textbf{đã có trong code} và đã gộp
-vào \texttt{docs/D1\_method.pdf} (Mục 2, 8--11, 13--14). Khi khác nhau, D1\_method (theo code) là bản đúng. Khác biệt so
-với bản thiết kế: nhãn DAgger chỉ ghi khi trạng thái còn trong vùng bay của các chỉ số (sai số vị trí $<5$ m,
-$|\phi|,|\theta|\le1.35$ rad); $\hat F$ tính hai cột ma trận quay mỗi bước (12 hàm lượng giác, không lưu đệm); giới hạn 2 s mỗi lần giải (Mục 7 dưới đây) đã \textbf{bị gỡ}: phụ thuộc phần cứng và không chặn được lỗi treo; ngân sách của teacher chỉ tính bằng số vòng lặp; lỗi treo do HPIPM trong bản acados chưa phát hành, sửa bằng bản phát hành acados v0.6.0. Thiết lập huấn luyện chốt 2026-10-03 (thay cho ``iter 500'' và ``8 chain'' ở dưới): SAC dừng ở iter \textbf{100}, bắt đầu học từ iter 10, checkpoint mỗi iter (DAgger chạy được trên từng checkpoint, workflow \texttt{d1-sweep.yml}), hành động SAC không bị chặn, \textbf{2 chain} (gốc Bryson; gốc ngẫu nhiên), các chuyến của mỗi iteration (SAC và DAgger) chạy song song trên 4 worker.}}
+{\itshape Thiết kế đã duyệt (2026-10-02) và đã hiện thực; tài liệu này viết lại theo mã nguồn (2026-10-04). Mã là bản đúng;
+mô tả đầy đủ của cả phương pháp ở \texttt{docs/D1\_method.pdf}.}\\[1mm]
+\fbox{\parbox{0.96\textwidth}{\small\textbf{Các chỗ mã khác bản đề xuất được duyệt ban đầu} (mọi mục dưới đây đã theo mã):
+(1) nhãn DAgger chỉ ghi khi trạng thái còn trong vùng bay của các chỉ số (sai số vị trí $<5$ m,
+$|\phi|,|\theta|\le1.35$ rad); (2) $\hat F$ tính lại cả hai hướng lực đẩy mỗi bước (12 hàm lượng giác, không lưu đệm);
+(3) không có giới hạn thời gian mỗi lần giải: ngân sách teacher chỉ tính bằng số vòng lặp; các lần treo nhiều giờ do vòng
+lặp không giới hạn của HPIPM trong bản acados chưa phát hành, sửa bằng bản phát hành acados v0.6.0; (4) huấn luyện:
+SAC dừng ở iter 100 (không phải 500), cập nhật từ iter 10, checkpoint mỗi iter, hành động SAC không bị chặn ($a=\mu$
+thay cho $\tanh(\mu)$), 2 chain (gốc Bryson; gốc ngẫu nhiên) thay cho 8, các chuyến của mỗi iteration (SAC và DAgger)
+chạy song song trên 4 worker.}}
 
-\section{Thay đổi gì, giữ gì}
+\section{Thay đổi so với học trò MLP trước đây}
 \begin{center}\small
-\begin{tabular}{@{}p{4.2cm}p{5.4cm}p{5.6cm}@{}}
+\begin{tabular}{@{}p{3.6cm}p{5.4cm}p{6.2cm}@{}}
 \toprule
-\textbf{Thành phần} & \textbf{Hiện tại} & \textbf{Đề xuất}\\
+\textbf{Thành phần} & \textbf{Trước (MLP, đã bỏ khỏi mã)} & \textbf{Hiện tại (mã)}\\
 \midrule
-Teacher & NMPC-scenario $M{=}5$, SAC tune $Q,R$, biết gió & \textbf{giữ nguyên} (+ giới hạn thời gian giải, Mục 7)\\
-Học trò (surrogate) & MLP 208-128-128-128, hai đầu, $\approx6\times10^4$ phép nhân-cộng & \textbf{tuyến tính} $\Delta u=W\varphi$, $W\in\R^{4\times27}$, 108 phép nhân-cộng\\
-Cách học & nhãn tại trạng thái teacher, song song với SAC & \textbf{DAgger} sau iter 500, teacher đóng băng\\
+Teacher & NMPC-scenario $M{=}5$, SAC tune $Q,R$, biết gió & \textbf{giữ}; ngân sách mỗi lần giải: tối đa 50 vòng SQP, 100 vòng QP, không giới hạn thời gian\\
+Học trò & MLP 208-128-128-128, hai đầu, $\approx6\times10^4$ phép nhân-cộng & \textbf{tuyến tính} $\Delta u=W\varphi$, $W\in\R^{4\times27}$, không bias\\
+Cách học & nhãn tại trạng thái teacher, song song với SAC & \textbf{DAgger} sau SAC, tại checkpoint chỉ định, teacher đóng băng ($a=\mu$)\\
 Giải bài toán học & Adam, từng nhãn & \textbf{ridge, nghiệm đóng} (lồi mạnh)\\
-$\cS$ & đầu sigmoid của MLP & \textbf{logistic} trên đặc trưng rẻ, cùng định nghĩa nhãn $s_k$\\
-$\cL$, cổng $\alpha=\cS g_L(\cL)$ & & \textbf{giữ nguyên}\\
-Luật triển khai & $u=\mathrm{sat}(\mathrm{sat}(\uL)+\alpha\Delta u)$ & \textbf{giữ nguyên}\\
+$\cS$ & đầu sigmoid của MLP & \textbf{logistic nhãn mềm} trên 18 đặc trưng rẻ, cùng định nghĩa nhãn $s_k$\\
+$\cL$ và cổng $g_L$ & & \textbf{giữ}\\
+Luật triển khai & $u=\mathrm{sat}(\mathrm{sat}(\uL)+\alpha\Delta u)$ & \textbf{giữ}\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\section{Học trò tuyến tính}
+\section{Học trò tuyến tính (\texttt{d1\_student\_feature})}
 \[
 \Delta u_k = W\varphi_k,\qquad
 \varphi_k=\big[\,e_k;\ \hat F_k;\ \bar u_k;\ \bar u_{k+N_c}-\bar u_k;\ \bar u_{k+N}-\bar u_k\,\big]\in\R^{12+3+4+4+4=27},
@@ -52,104 +57,126 @@ Trong đó:
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
 \item $e_k=x_k-x_{\mathrm{ref},k}$ (12, góc Euler quấn về $(-\pi,\pi]$): để học trò học được gain phản hồi khác của teacher.
 \item $\hat F_k$ (3): lực ngoài ước lượng (Mục 3): phần bù gió mà teacher làm nhờ biết gió.
-\item $\bar u_k$ (4): lệnh feedforward flatness của tham chiếu (tính sẵn cùng quỹ đạo, không tốn chi phí online).
-\item $\bar u_{k+N_c}-\bar u_k$ và $\bar u_{k+N}-\bar u_k$ (8): nhìn trước ở đúng hai tầm của teacher ($N_c{=}5$ bước điều khiển, $N{=}20$ bước dự báo) để học trò đón trước khúc cua như teacher.
+\item $\bar u_k$ (4): lệnh feedforward flatness của tham chiếu (tính sẵn cùng quỹ đạo).
+\item $\bar u_{k+N_c}-\bar u_k$ và $\bar u_{k+N}-\bar u_k$ (8): nhìn trước ở đúng hai tầm của teacher ($N_c{=}5$, $N{=}20$).
 \end{itemize}
 \textbf{Không có hằng số tự do (bias).} Tại cân bằng hover không gió, $\varphi=0$ và teacher trùng LQR ($\Delta u^*=0$), nên
-yêu cầu $\Delta u(0)=0$ là đúng về vật lý; thêm bias sẽ tạo lệch tĩnh giả khi không có gió. Vì cùng lý do, chuẩn hoá đặc
-trưng chỉ \emph{chia} cho độ lệch chuẩn, \emph{không trừ} trung bình.
+$\Delta u(0)=0$ là đúng về vật lý; bias sẽ tạo lệch tĩnh giả khi không có gió. Vì cùng lý do, khi học, mỗi đặc trưng chỉ được
+\emph{chia} cho RMS của chính nó trên toàn bộ dữ liệu, \emph{không trừ} trung bình (\texttt{d1\_ridge\_fit}); $W$ lưu trong
+file học trò đã ở đơn vị vật lý.
 
-\textbf{Chi phí mỗi bước:} $W\varphi$: $4\times27=108$ phép nhân-cộng; $\hat F$: một cột ma trận quay (6 hàm lượng giác,
-dùng lại ở bước sau) $+\approx20$ phép tính; hai logistic của cổng $\approx40$ phép nhân-cộng $+2$ hàm mũ. LQR: $48$ phép
-nhân-cộng. Cùng bậc micro-giây.
+\textbf{Chi phí mỗi bước:} $W\varphi$: 108 phép nhân, 104 phép cộng. Toàn bộ P mỗi bước (đếm từ mã như chạy trong đánh giá
+cuối): 254 nhân, 46 chia, 327 cộng/trừ, 33 hàm sơ cấp (12 sin/cos, 10 căn, 2 exp, 9 mod); LQR: 48 nhân, 60 cộng/trừ
+(\texttt{docs/D1\_method.pdf}, mục chi phí tính toán; thời gian đo trên một máy cố định ở \texttt{docs/D1\_runs.md}).
 
-\section{Ước lượng lực ngoài $\hat F$}
+\section{Ước lượng lực ngoài $\hat F$ (\texttt{d1\_fhat})}
 Động lực học tịnh tiến danh nghĩa: $m\dot v=\alpha_T T\,R(\eta)e_3-mg\,e_3-D_v v+F$. Lấy tích phân hình thang trên một bước
 (lệnh $T_{k-1}$ giữ bậc 0):
 \[
 \hat F_k = \frac{m}{T_s}(v_k-v_{k-1}) + mg\,e_3
 -\alpha_T T_{k-1}\,\tfrac12\big(R(\eta_{k-1})+R(\eta_k)\big)e_3+\tfrac12D_v(v_{k-1}+v_k),
 \]
-với $m,\alpha_T,D_v$ danh nghĩa; $\hat F=0$ ở bước đầu và sau mỗi lần đặt lại do phân kỳ. \textbf{Kiểm tra} (LQR, 5 quỹ
-đạo, gió huấn luyện, so với lực trung bình thật trong bước): sai số tương đối trung vị $1.0\%$, sai số tuyệt đối p95
-$0.031$ N (lực điển hình $\approx1$ N). Chỉ dùng phần tịnh tiến: khi huấn luyện gió không tạo mô-men nên phần quay không
-mang thông tin (bỏ được vấn đề đầu vào ngoài phân phối của bản cũ).
+với $m,\alpha_T,D_v$ danh nghĩa; $\hat F=0$ ở bước đầu và sau mỗi lần đặt lại do phân kỳ (\texttt{d1\_student\_init}).
+Kiểm tra một lần khi thiết kế (LQR, 5 quỹ đạo, gió huấn luyện, so với lực trung bình thật trong bước; script kiểm tra không
+nằm trong repo): sai số tương đối trung vị $1.0\%$, sai số tuyệt đối p95 $0.031$ N (lực điển hình $\approx1$ N). Chỉ dùng phần
+tịnh tiến: gió huấn luyện (\texttt{d1\_sample\_wind}) không tạo mô-men.
 
-\section{DAgger (Ross, Gordon, Bagnell 2011, Thuật toán 3.1)}
-Chạy \textbf{sau khi SAC dừng ở iter 500}; chuyên gia $\pi^*$ = teacher với trọng số $a=\tanh(\mu)$ của checkpoint, \textbf{cố
-định} suốt DAgger (điều kiện của định lý). Chọn biến thể không tham số $\beta_1=1,\ \beta_{i\ge2}=0$ (bài báo: thường tốt nhất).
+\section{DAgger (Ross, Gordon, Bagnell 2011, Thuật toán 3.1; \texttt{d1\_dagger\_run})}
+Chạy \textbf{sau SAC}, trên checkpoint chỉ định (\texttt{ckpt\_suffix}, ví dụ \texttt{\_iter0100}); chuyên gia $\pi^*$ =
+teacher với trọng số $a=\mu$ (hành động trung bình) của checkpoint, \textbf{cố định} suốt DAgger (điều kiện của định lý).
+Biến thể không tham số $\beta_1=1,\ \beta_{i\ge2}=0$. Mỗi vòng bay 20 quỹ đạo rút có hoàn lại từ ngân hàng 120 quỹ đạo,
+gió huấn luyện; chỉ số quỹ đạo và gió được rút tuần tự trên client từ dòng ngẫu nhiên khởi tạo \texttt{seed}$+9900$.
 \begin{enumerate}[leftmargin=1.6em,itemsep=1pt]
-\item Vòng 1: \emph{teacher bay} 20 quỹ đạo (gió huấn luyện); tại mỗi bước giải dùng được ghi $(\varphi_k,\Delta u^*_k)$,
-$\Delta u^*_k=u_T-\mathrm{sat}(\uL)$. Giải ridge $\to W_2$.
-\item Vòng $i=2..N_D$: \emph{học trò bay} 20 quỹ đạo với $\alpha=1$: $u=\mathrm{sat}(\mathrm{sat}(\uL)+W_i\varphi)$. Tại
-\emph{mỗi} trạng thái học trò đi qua, \emph{hỏi} teacher (trạng thái đó, lệnh trước đó của học trò, lực gió đúng) nhưng
-\textbf{không áp dụng} lệnh của teacher; ghi nhãn nếu lời giải dùng được. Gộp với mọi dữ liệu cũ, giải ridge $\to W_{i+1}$.
-\item Trả về $W^\star$ tốt nhất trên tập kiểm định $\mathcal V$ (bên dưới), trong số các $W_i$ đạt kiểm tra ổn định (Mục 5).
+\item Vòng 1: \emph{teacher bay}. Tại mỗi bước có lời giải dùng được (status 0 hoặc 2, kết quả hữu hạn) và trạng thái còn
+trong vùng bay (sai số vị trí $<5$ m, $|\phi|,|\theta|\le1.35$ rad) ghi $(\varphi_k,y_k)$,
+$y_k=(u_T-\mathrm{sat}(\uL))\oslash(u_{\max}-u_{\min})$.
+\item Vòng $i=2..N_D$: \emph{học trò bay} với $\alpha=1$: $u=\mathrm{sat}(\mathrm{sat}(\uL)+W_i\varphi)$. Tại \emph{mỗi}
+trạng thái học trò đi qua, \emph{hỏi} teacher (trạng thái đó, lệnh trước đó của học trò làm $u_{\mathrm{prev}}$, lực gió
+đúng) nhưng \textbf{không áp dụng} lệnh của teacher; ghi nhãn theo cùng điều kiện như vòng 1 (\texttt{d1\_dagger\_case}).
+\item Sau mỗi vòng: gộp mọi dữ liệu, giải ridge $\to W_{i+1}$ (ứng viên thứ $i$), kiểm tra ổn định (Mục 5), chấm trên tập
+kiểm định $\mathcal V$.
+\item Trả về $W^\star$ có RMSE kiểm định nhỏ nhất trong các ứng viên \textbf{đạt} kiểm tra ổn định; nếu không ứng viên nào
+đạt, pha DAgger dừng báo lỗi.
 \end{enumerate}
-\textbf{Ridge, nghiệm đóng:} $W\T=(\Phi\T\Phi+\lambda I)^{-1}\Phi\T Y$ trên đặc trưng đã chuẩn hoá. Dữ liệu lưu dưới dạng
-\emph{thống kê đủ} theo từng quỹ đạo ($\Phi_c\T\Phi_c\in\R^{27\times27}$, $\Phi_c\T Y_c$), nên gộp hàng trăm nghìn nhãn
-không tốn bộ nhớ và nghiệm là chính xác. $\lambda$ chọn trên lưới $10^{-6},\dots,10^{2}$ bằng kiểm định chéo 5 phần
-\emph{theo quỹ đạo} (loại (O): tối ưu trên tập chia rõ ràng).
+\textbf{Ridge, nghiệm đóng} (\texttt{d1\_ridge\_fit}): dữ liệu lưu dưới dạng \emph{thống kê đủ} theo từng chuyến
+($\sum\varphi\varphi\T\in\R^{27\times27}$, $\sum\varphi y\T$, $\sum yy\T$, số nhãn), nên gộp hàng trăm nghìn nhãn không tốn
+bộ nhớ và nghiệm là chính xác. Với đặc trưng đã chia RMS: $\tilde W\T=(\tilde\Phi\T\tilde\Phi+\lambda nI)^{-1}\tilde\Phi\T Y$,
+$\lambda\in\{10^{-6},10^{-5},\dots,10^{2}\}$ chọn bằng kiểm định chéo 5 phần \emph{theo chuyến bay} (chuyến thứ $c=1,2,\dots$ theo thứ tự
+thu thập thuộc phần $((c-1)\bmod 5)+1$; MSE giữ lại tính chính xác từ thống kê), rồi giải lại trên toàn bộ dữ liệu.
 
-\textbf{Tập kiểm định $\mathcal V$:} 15 chuyến, mỗi ô (họ quỹ đạo $\times$ mức gia tốc) một quỹ đạo, gió huấn luyện rút từ
-một dòng ngẫu nhiên riêng (\texttt{seed}$+7700$), không trùng dữ liệu DAgger. Tiêu chí: RMSE vị trí đã chặn $5$ m (giống
-reward) của học trò $\alpha=1$. Rẻ (không cần teacher).
+\textbf{Tập kiểm định $\mathcal V$} (\texttt{d1\_val\_set}): 15 chuyến, mỗi ô (họ quỹ đạo $\times$ mức gia tốc) một quỹ đạo
+(quỹ đạo có tốc độ trung vị của ô), gió huấn luyện rút từ dòng riêng \texttt{RandStream(seed}$+7700$\texttt{)}, không trùng
+dữ liệu DAgger. Tiêu chí: RMSE vị trí đã chặn $5$ m (như reward) của học trò $\alpha=1$; không cần teacher. Để so sánh
+(chẩn đoán, không dùng để chọn), teacher đóng băng và LQR bay đúng 15 chuyến này với cùng định nghĩa RMSE.
 
-\textbf{Ngân sách} (loại (R)): $N_D=10$ vòng $\times$ 20 quỹ đạo $\approx1.96\times10^5$ lần giải teacher, tương đương
-10 iter SAC; chạy được trong một job CI, resume theo vòng.
+\textbf{Ngân sách} (\texttt{D1\_DAGGER\_ITERS}, mặc định $N_D=10$): $10$ vòng $\times$ 20 chuyến $\times$ 979 bước
+$\approx1.96\times10^5$ lần giải teacher, tương đương 10 iter SAC. Các chuyến của một vòng chạy song song trên các worker
+cục bộ; trạng thái (thống kê, ứng viên, dòng ngẫu nhiên) lưu sau mỗi vòng nên chạy tiếp được theo vòng.
 
-\textbf{Định lý áp dụng tới đâu.} Mất mát ridge lồi mạnh theo $W$ và FTL trên mất mát lồi mạnh là no-regret, nên giả thiết
-của Định lý 3.1/3.3 được thoả \emph{về cấu trúc} (chuyên gia cố định, mất mát lồi mạnh và bị chặn khi đặc trưng và lệnh
-bị chặn). Nhưng bậc $N=\tilde O(T)$ với $T=979$ không đạt được với $N_D=10$, nên lợi ích được báo là \textbf{thực nghiệm}.
+\textbf{Định lý áp dụng tới đâu.} Mất mát ridge lồi mạnh theo $W$ và Follow-the-Leader trên mất mát lồi mạnh là no-regret,
+nên giả thiết của Định lý 3.1/3.3 được thoả \emph{về cấu trúc} (chuyên gia cố định, mất mát lồi mạnh, bị chặn trong vùng
+bay). Nhưng bậc $N=\tilde O(T)$ với $T=979$ không đạt được với $N_D=10$, nên lợi ích được báo là \textbf{thực nghiệm}.
 Hai sai số không giảm được: học trò chỉ thấy $\hat F$ trễ một bước thay cho $F$ đúng, và tuyến tính không biểu diễn được
 phần phi tuyến của teacher.
 
-\section{Kiểm tra ổn định (tuyến tính hoá quanh hover, nhiễu bằng 0)}
-Với $x_{\mathrm{ref}}=0$, đặc trưng tham chiếu bằng 0; $\hat F_k=L_1x_k+L_0x_{k-1}+L_u\,\delta u_{k-1}$ (tuyến tính hoá
-công thức Mục 3). Đặt $z_k=[x_k;\ x_{k-1};\ \delta u_{k-1}]$ và $W=[W_e\ W_F\ \cdot]$:
+\section{Kiểm tra ổn định (\texttt{d1\_student\_stability}; tuyến tính hoá quanh hover, không nhiễu)}
+Với $x_{\mathrm{ref}}=0$, đặc trưng tham chiếu bằng 0 và $\varphi=[x;\hat F;0]$; $\hat F_k=L_1x_k+L_0x_{k-1}+L_u\,\delta u_{k-1}$,
+$\delta u=u-u_h$, với $L_1,L_0,L_u$ là Jacobian của \texttt{d1\_fhat} tại hover tính bằng sai phân trung tâm. Đặt
+$z_k=[x_k;\ x_{k-1};\ \delta u_{k-1}]$ và $W=[W_e\ W_F\ \cdot]$:
 \[
 z_{k+1}=A_\alpha z_k,\quad
-A_\alpha=\begin{bmatrix}A_d+B_dG_1 & B_dG_0 & B_dG_u\ I&0&0\ G_1&G_0&G_u\end{bmatrix},
+A_\alpha=\begin{bmatrix}A_d+B_dG_1 & B_dG_0 & B_dG_u\\ I&0&0\\ G_1&G_0&G_u\end{bmatrix},
 \]
 \[
-G_1=-K+\alpha(W_e+W_FL_1),\ G_0=\alpha W_FL_0,\ G_u=\alpha W_FL_u .
+G_1=-K+\alpha(W_e+W_FL_1),\quad G_0=\alpha W_FL_0,\quad G_u=\alpha W_FL_u .
 \]
-Với $\alpha=0$ phổ là của $A_d-B_dK$ (Schur). Yêu cầu: $\rho(A_\alpha)<1$ trên lưới $\alpha\in\{0,0.001,\dots,1\}$; $W_i$ nào
-không đạt thì \textbf{bị loại} khỏi lựa chọn. Đây là điều kiện cần cho $\alpha$ cố định trên mô hình tuyến tính hoá, không bảo
-đảm cho $\alpha$ thay đổi theo thời gian, bão hoà hay plant lệch (công bố như vậy).
+Với $\alpha=0$ là vòng LQR ($A_d-B_dK$, Schur). Yêu cầu: $\rho(A_\alpha)<1$ với mọi $\alpha\in\{0,0.001,\dots,1\}$; ứng viên
+không đạt bị \textbf{loại} khỏi lựa chọn. Đây là điều kiện cần cho $\alpha$ cố định trên mô hình tuyến tính hoá, không bảo
+đảm cho $\alpha$ thay đổi theo thời gian, bão hoà hay plant lệch.
 
-\section{Tin cậy và cổng}
-$\cL$: giữ nguyên. $\cS$: giữ \emph{định nghĩa} nhãn $s_k=\exp(-(E^S_{20}(k)/\varepsilon_p)^2)$ trên rollout học trò
-$\alpha=1$ (40 quỹ đạo, gió huấn luyện), nhưng mô hình là \textbf{hồi quy logistic với nhãn mềm} trên 18 đặc trưng rẻ:
-16 đặc trưng sai số của $\cL$, $\norm{\hat F}$ và $\norm{\bar u_k}$. Cổng $\alpha=\cS\,g_L(\cL)$, $c_{\mathrm{low}}=0.3$,
-$c_{\mathrm{high}}=0.7$, $\varepsilon_p=0.5$ m: giữ nguyên.
+\section{Tin cậy và cổng (\texttt{d1\_consolidate}, \texttt{d1\_blend\_control})}
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item $\cL$: hồi quy logistic $P(V_{k+H}<V_k)$, $V=e\T Pe$, $H=20$, trên 16 đặc trưng sai số (\texttt{d1\_conf\_feature}),
+dữ liệu 60 chuyến LQR lấy đều từ ngân hàng, gió huấn luyện; trọng số cân bằng lớp, L2 $10^{-3}$, 800 bước gradient (lr $0.5$).
+\item $\cS$: giữ \emph{định nghĩa} nhãn $s_k=\exp(-(E^S_{20}(k)/\varepsilon_p)^2)$, $\varepsilon_p=0.5$ m, trên chuyến bay của
+học trò $W^\star$ ở $\alpha=1$ (40 chuyến lấy đều từ ngân hàng, gió huấn luyện); mô hình là \textbf{hồi quy logistic với nhãn
+mềm} (không trọng số lớp, L2 $10^{-3}$, 800 bước) trên 18 đặc trưng rẻ: 16 đặc trưng của $\cL$, $\norm{\hat F_k}$ và
+$\norm{\bar u_k}$ (\texttt{d1\_cs\_feature}).
+\item Cổng $\alpha=\cS\,g_L(\cL)$, $g_L=\mathrm{clip}((c_{\mathrm{high}}-\cL)/(c_{\mathrm{high}}-c_{\mathrm{low}}),0,1)$,
+$c_{\mathrm{low}}=0.3$, $c_{\mathrm{high}}=0.7$. Chặn an toàn $\alpha\le(1-\varepsilon)\bar\alpha$ chỉ là tuỳ chọn
+\texttt{D1\_ALPHA\_SAFE=1}, mặc định tắt và tắt trong mọi run.
+\end{itemize}
 
-\section{Pipeline, code và lỗi treo solver}
+\section{Pipeline và mã}
 \begin{enumerate}[leftmargin=1.6em,itemsep=1pt]
-\item \textbf{SAC (iter 1--500):} chỉ tune teacher; bỏ việc học surrogate trong lúc SAC. Checkpoint mốc mỗi 50 iter chỉ lưu
-SAC/teacher.
-\item \textbf{DAgger} (chế độ mới \texttt{D1\_DAGGER=1}, đọc checkpoint SAC chỉ định, resume theo vòng) $\to$ chọn $W^\star$
-$\to$ hiệu chỉnh $\cS$, $\cL$ $\to$ file triển khai \texttt{student\_seed<s>[\_iter<NNNN>].mat}
-($W^\star$, thang chuẩn hoá, $\lambda$, \texttt{conf}).
-\item \textbf{Đánh giá cuối:} P dùng file học trò; các bộ khác giữ nguyên.
-\item \textbf{Lỗi treo:} \texttt{timeout\_max\_time} $=2$ s mỗi lần giải acados; hết giờ $=$ lời giải không dùng được (giữ lệnh
-cũ, reset, tính vào $r_{\mathrm{fail}}$). Dòng log mỗi quỹ đạo ghi thêm thời gian giải lớn nhất, p99 và số lần hết giờ để
-kiểm chứng ngưỡng (lời giải bình thường ước tính $\le0.2$ s; quỹ đạo dài nhất trong 2804 quỹ đạo đã xong là 140 s).
-\item Bỏ khỏi code: MLP, bộ đệm nhãn, đặc trưng 208 chiều, phần dư dự báo 12 chiều (thay bằng $\hat F$). Tài liệu D1 viết lại
-các mục tương ứng; train lại cả 8 chain từ đầu trên một commit.
+\item \textbf{SAC} (\texttt{experiments/run\_d1\_joint\_pipeline.m}): chỉ tune teacher, không học học trò. Dừng ở iter 100
+(\texttt{stop\_iter}), cập nhật từ iter 10; checkpoint (\texttt{sac}, \texttt{st}, trạng thái ngẫu nhiên) lưu sau mỗi iter và
+bản mốc \texttt{checkpoint\_seed<s>\_iter<NNNN>.mat} mỗi iter.
+\item \textbf{DAgger} (\texttt{D1\_DAGGER=1}, đọc checkpoint \texttt{checkpoint\_seed<s>\allowbreak<suffix>.mat}, chạy tiếp theo vòng
+qua \texttt{dagger\_seed<s>\allowbreak<suffix>.mat}) $\to$ chọn $W^\star$ $\to$ học $\cS$, $\cL$ $\to$ file triển khai
+\texttt{student\_seed<s>\allowbreak<suffix>.mat} (\texttt{stu}: $W^\star$, $\lambda$, RMS đặc trưng, $\rho_{\max}$, RMSE kiểm định, các
+ứng viên, iter của checkpoint, RMSE kiểm định của teacher và LQR; \texttt{conf}) và một dòng
+\texttt{sweep\_seed<s>\_iter<NNNN>.csv}.
+\item \textbf{Đánh giá cuối} (\texttt{experiments/d1\_final\_eval.m}): P dùng file học trò; iter của học trò phải trùng
+iter của checkpoint teacher.
+\item \textbf{Solver teacher:} ngân sách mỗi lần giải chỉ tính bằng số vòng lặp (tối đa 50 SQP, 100 QP); lời giải dùng được
+khi status 0 hoặc 2 và kết quả hữu hạn, nếu không thì giữ lệnh cũ, đặt lại solver và tính vào tỉ lệ thất bại của reward. Mọi
+run dùng bản phát hành acados v0.6.0. Dòng log mỗi chuyến DAgger ghi thời gian giải lớn nhất và p99 (chẩn đoán).
+\item Không còn trong mã: MLP, bộ đệm nhãn, đặc trưng 208 chiều, phần dư dự báo 12 chiều (thay bằng $\hat F$).
 \end{enumerate}
 
 \section{Hạn chế (công bố)}
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]
-\item Tuyến tính: kém teacher ở vùng phi tuyến (nghiêng lớn, 14--16 m/s OOD). Phương án dự phòng nếu không đủ: một lớp ẩn 16
-nơ-ron ($\approx600$ phép nhân-cộng), mất tính lồi.
-\item $\hat F$ lấy từ sai phân vận tốc: không có nhiễu đo trong mô phỏng; trên máy bay thật cần lọc.
-\item Nhãn chỉ có ở lời giải dùng được: vùng teacher thất bại/hết giờ thiếu nhãn.
-\item Giới hạn thời gian làm kết quả phụ thuộc tốc độ máy \emph{chỉ} ở các lần giải bệnh lý.
+\item Tuyến tính: kém teacher ở vùng phi tuyến (nghiêng lớn, 14--16 m/s OOD). Một hướng mở rộng nếu cần (chưa có trong mã):
+một lớp ẩn 16 nơ-ron ($\approx600$ phép nhân-cộng), mất tính lồi.
+\item $\hat F$ lấy từ sai phân vận tốc: mô phỏng không có nhiễu đo; trên máy bay thật cần lọc.
+\item Nhãn chỉ có ở lời giải dùng được và trong vùng bay: vùng teacher thất bại hoặc trạng thái ngoài vùng bay không có nhãn.
+\item Kiểm tra ổn định chỉ là điều kiện cần cho $\alpha$ cố định trên mô hình tuyến tính hoá (Mục 5).
 \end{itemize}
 
-\section{Cần duyệt}
-$\varphi$ (27 đặc trưng, không bias); $\hat F$ hình thang; DAgger $\beta_1{=}1$, $N_D{=}10$, 20 quỹ đạo/vòng, học trò bay với
-$\alpha{=}1$; ridge với $\lambda$ chọn bằng CV theo quỹ đạo; $\mathcal V$ 15 chuyến, dòng gió riêng; kiểm tra $\rho(A_\alpha)$;
-$\cS$ logistic nhãn mềm; timeout 2 s; mốc chỉ lưu teacher; train lại 8 chain.
+\section{Các lựa chọn đã duyệt (theo mã)}
+$\varphi$ 27 đặc trưng, không bias; $\hat F$ hình thang; DAgger $\beta_1{=}1$, $N_D{=}10$, 20 chuyến/vòng, học trò bay với
+$\alpha{=}1$, nhãn trong vùng bay; ridge với $\lambda$ chọn bằng CV theo chuyến bay; $\mathcal V$ 15 chuyến, dòng gió riêng;
+kiểm tra $\rho(A_\alpha)$; $\cS$ logistic nhãn mềm; ngân sách teacher bằng số vòng lặp; checkpoint SAC chỉ chứa SAC/teacher;
+2 chain, SAC 100 iter.
 \end{document}
