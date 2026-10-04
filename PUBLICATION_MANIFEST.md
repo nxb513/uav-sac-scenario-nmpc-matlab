@@ -24,8 +24,9 @@ The public package contains, for method D1 (`docs/D1_method.pdf`):
 
 Outside `legacy/`, only the MATLAB files called by the two D1 entry points remain.
 
-Explicitly excluded for D1: SAC checkpoints and student files (they exist only as
-GitHub Actions artifacts of the runs), measured wind data (Neural-Fly is not
+Explicitly excluded for D1: SAC checkpoints and student files (GitHub Actions artifacts
+of the runs, kept 30 days by GitHub; the author keeps a copy of the artifacts of every
+official run), measured wind data (Neural-Fly is not
 redistributable; SWUF-3D is fetched from Zenodo), and evaluation outputs.
 
 ## Legacy pipeline (superseded, kept for provenance; see `legacy/legacy_pipeline.md`)

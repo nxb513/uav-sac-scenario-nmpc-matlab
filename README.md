@@ -163,7 +163,9 @@ from their sources inside the CI job and are never committed or uploaded. See
 
 This repository is a public computational runner, not the complete research project. It
 contains no papers, manuscript, trained checkpoints or private credentials. Trained
-checkpoints live only in the GitHub Actions artifacts of the runs. No reuse license has
+checkpoints, student files and evaluation outputs are GitHub Actions artifacts of the runs,
+which GitHub keeps for 30 days; the author keeps a copy of the artifacts of every official run
+(`docs/D1_runs.md`), available on request. No reuse license has
 been selected yet; publication on GitHub does not by itself grant an open-source license.
 
 MATLAB R2024a runs through the official `matlab-actions/setup-matlab@v3` and

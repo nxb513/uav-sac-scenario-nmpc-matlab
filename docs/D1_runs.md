@@ -1,5 +1,9 @@
 # D1 runs (official list)
 
+GitHub keeps run artifacts for 30 days (the artifacts of the runs below expire from
+2026-11-02). The author keeps a copy of the artifacts of every run listed here, available on
+request.
+
 Only the GitHub Actions runs listed here are results of the current D1 code and setup
 (`docs/D1_method.pdf`). **Every other run in the Actions history is a draft or superseded
 and must not be used**: all runs created before 2026-10-03 15:00 UTC (earlier D1 setups,
