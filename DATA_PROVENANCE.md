@@ -29,7 +29,10 @@ uploaded as artifacts.
   `F = (m/2.53) (c1 + c2 |w|) w`, with (c1, c2) fitted on the Neural-Fly steady-wind mean
   forces; first 49 s of each flight.
 
-## Legacy pipeline (superseded; see `docs/legacy_pipeline.md`)
+## Legacy pipeline (superseded; see `legacy/legacy_pipeline.md`)
+
+The files named below are under `legacy/` with their former relative paths (see
+`legacy/README.md`).
 
 ### Training-bank reconstruction (legacy)
 
@@ -43,8 +46,8 @@ Candidate C012 was locked using validation seed `300830201`, not the training
 seed. Its hard target is a future absolute-envelope, saturation, state/tilt or
 nonfinite event within 20 steps. Growth-only warnings are saved in a separate
 auxiliary stratum and are not hard-failure labels. The deterministic builder
-is `experiments/build_targeted_c012_context_bank.m`; its audit is
-`experiments/audit_targeted_c012_context_bank.m`.
+is `legacy/experiments/build_targeted_c012_context_bank.m`; its audit is
+`legacy/experiments/audit_targeted_c012_context_bank.m`.
 
 Each causal-v2 context stores four real state samples, four applied inputs,
 the nominal one-step prediction residual and feature identity. The SAC reset
@@ -60,12 +63,12 @@ controller result.
 
 ### Nominal reference-feasibility artifacts (legacy)
 
-`results/targeted_lqr_weak_rebuild_v1/reference_feasibility_v1/` contains the
+`legacy/results/targeted_lqr_weak_rebuild_v1/reference_feasibility_v1/` contains the
 first 120-case nominal screen. It is superseded because its low-speed load
 labels were not dynamically distinct and its randomized bank did not enforce
 realized-speed tolerance.
 
-`results/targeted_lqr_weak_rebuild_v1/reference_feasibility_v2_realized_coverage/`
+`legacy/results/targeted_lqr_weak_rebuild_v1/reference_feasibility_v2_realized_coverage/`
 is the active 120-case screen. All 120 rows pass the physical and robust-train
 reference gates. Maximum realized speed/acceleration errors are approximately
 `0.27%/18.37%` in this deterministic screen. Both artifact directories include
@@ -107,7 +110,7 @@ local-refinement candidates and the top five on the independent selection
 bank. This is validation-only model selection; no OOD confirmation realization
 is opened. The selected `R_089` controller from successful v6 run
 `33500607984` is committed at
-`results/targeted_lqr_weak_rebuild_v1/lqr_retune_realized_coverage_v6/selected_lqr.mat`
+`legacy/results/targeted_lqr_weak_rebuild_v1/lqr_retune_realized_coverage_v6/selected_lqr.mat`
 so deterministic context reconstruction does not depend on expiring Actions
 artifacts. Its SHA-256 digest is recorded beside the file; the large design and
 selection banks remain excluded.

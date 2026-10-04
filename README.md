@@ -2,9 +2,14 @@
 
 The active method of this repository is **D1**. Its complete description (Vietnamese)
 is `docs/D1_method.pdf` (source `docs/D1_method.tex`); the document is kept in sync with
-the code, and the code is authoritative. Earlier pipelines are superseded and described
-only in `docs/legacy_pipeline.md`. `docs/D1_student_design.pdf` is the approved design of
-the linear student + DAgger; it is now implemented and merged into `docs/D1_method`.
+the code, and the code is authoritative. `docs/D1_student_design.pdf` is the approved design of the
+linear student + DAgger; it is now implemented and merged into `docs/D1_method`.
+
+- **Official runs:** `docs/D1_runs.md` lists the GitHub Actions runs of the current code;
+  every other run in the Actions history is a draft or superseded (kept, not deleted).
+- **Earlier pipelines** are superseded. Their code, workflows, tests and results are kept,
+  not deleted, in `legacy/` (see `legacy/README.md`; the former README is
+  `legacy/legacy_pipeline.md`). Nothing in `legacy/` is on the D1 MATLAB path.
 
 ## Method in one page
 
@@ -56,9 +61,10 @@ The diagnostic replay used to find the solver hang (`experiments/d1_diag_replay.
 `d1-diag-replay.yml`, `tools/ci/d1_set_ftz.c`, `diag_watchdog.sh`, `diag_gdb.py`) is kept
 in the history at commit `7f60828`; it reads only the earlier checkpoint format.
 
-All other scripts in `experiments/` belong to earlier stages and are not part of the current
-pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `select_d1_teacher`,
-`build_d1_*`, `d1_acados_teacher_verify` and `test_d1_lyapunov_contraction`.
+Outside `legacy/`, the repository holds only the MATLAB files that the two D1 entry points
+call (static call graph). Older scripts, including the older D1-stage scripts
+`run_d1_teacher_grid`, `select_d1_teacher`, `build_d1_*`, `d1_acados_teacher_verify` and
+`test_d1_lyapunov_contraction`, are in `legacy/experiments/`.
 
 ## Common flight rules (all training, DAgger, diagnostic and evaluation flights)
 
@@ -87,6 +93,8 @@ pipeline. This includes the older D1-stage scripts `run_d1_teacher_grid`, `selec
     two chains share the exploration noise, case draws and winds (the reference-bank build
     reseeds the global random stream per case), so they form a paired comparison; the seed
     sets only the teacher's model scenarios and the random base.
+  - **Final test at SAC iteration 100:** both chains, DAgger (`ckpt_suffix=_iter0100`) and
+    the final evaluation run on tag `d1-final-iter100`; run ids in `docs/D1_runs.md`.
   - **Artifact per seed:** `d1-joint-ckpt-seed<seed>-<run_id>`. It holds
     `checkpoint_seed<s>.mat` (saved after every iteration) and the milestone copies
     `checkpoint_seed<s>_iter<NNNN>.mat` (every iteration with `ckpt_every=1`). The SAC
@@ -127,7 +135,8 @@ written for 60 minutes, it saves the stacks of every MATLAB process, client and 
 uploaded. It never changes the
 training itself.
 
-Other `matlab-*.yml` workflows belong to the legacy pipeline.
+The former `matlab-*.yml` workflows of the legacy pipeline are in `legacy/workflows/`;
+GitHub no longer offers them, and their runs remain in the Actions history.
 
 ## Data
 

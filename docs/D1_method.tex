@@ -68,7 +68,8 @@ $\cS/\cL$, bộ điều khiển đề xuất (trộn theo tin cậy), phân tíc
 huấn luyện có gió ngẫu nhiên, và giao thức đánh giá. Mọi mô tả khớp với mã nguồn hiện tại: các định nghĩa
 dùng chung nằm trong \texttt{src/joint/d1\_*.m}, được cả pipeline huấn luyện
 (\texttt{experiments/\allowbreak run\_d1\_joint\_pipeline.m}) lẫn đánh giá cuối
-(\texttt{experiments/\allowbreak d1\_final\_eval.m}) gọi.
+(\texttt{experiments/\allowbreak d1\_final\_eval.m}) gọi. Mã của các giai đoạn trước nằm riêng trong
+\texttt{legacy/} (giữ lại, không xoá, không nằm trên đường dẫn MATLAB của D1).
 \end{minipage}
 \vfill
 {\itshape\small Mô phỏng; ký hiệu và tham số theo mã nguồn dự án. Nguồn tài liệu ở mục cuối.\par}
@@ -810,7 +811,10 @@ Script riêng, chạy bằng workflow \texttt{d1-final-eval.yml}; mỗi chain đ
 SAC (\texttt{D1\_CKPT}) cho teacher và file học trò cùng mốc (\texttt{D1\_STUDENT}; bắt buộc để chạy P; phải
 thuộc đúng iter của checkpoint). \texttt{run} của chain là run DAgger của \texttt{d1-joint-pipeline.yml} (artifact
 của nó chứa cả hai); học trò của workflow khảo sát \texttt{d1-sweep.yml} nằm trong artifact riêng không kèm
-checkpoint nên chưa đưa thẳng vào đánh giá cuối. Script gọi
+checkpoint nên chưa đưa thẳng vào đánh giá cuối. \textbf{Bài test chốt} đánh giá cả hai chain tại iter 100
+(\texttt{\_iter0100}); DAgger và đánh giá cuối của nó chạy trên tag \texttt{d1-final-iter100}. Danh sách run chính
+thức nằm ở \texttt{docs/D1\_runs.md}; mọi run khác trong lịch sử GitHub Actions là nháp hoặc đã thay thế (giữ
+lại, không xoá). Script gọi
 đúng các hàm dùng chung của \texttt{src/joint}. \textbf{Mọi bộ điều khiển chỉ biết mô hình danh nghĩa}; plant
 thật là mẫu LHS của repo mà bộ điều khiển không biết.
 \begin{itemize}[leftmargin=1.4em,itemsep=1pt]

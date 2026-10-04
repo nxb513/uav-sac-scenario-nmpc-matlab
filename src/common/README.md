@@ -1,7 +1,12 @@
 # src/common
 
-Hàm tiện ích chung: rotation/Euler, saturation, logging, seed, sampling, interpolation.
+Tiện ích quỹ đạo tham chiếu dùng bởi D1:
 
-`quad_reference_trajectory.m` tạo reference hover, position step và circle dùng chung cho benchmark/experiment.
+- `quad_sample_targeted_reference_options`, `quad_targeted_reference_trajectory`,
+  `quad_reference_trajectory`: sinh quỹ đạo tham chiếu theo họ/tốc độ/gia tốc (ngân hàng
+  huấn luyện `d1_train_cases`, cấu hình `d1_config`, đánh giá cuối `d1_final_eval`).
+- `quad_complete_flat_reference`: hoàn thiện tham chiếu phẳng (trạng thái + đầu vào), cũng
+  dùng trong đích nhất quán với gió của teacher (`d1_teacher_target`).
+- `d1_case_seed`: seed cố định theo tên quỹ đạo (`d1_train_cases`).
 
-Không đặt logic controller hoặc plant chính ở đây nếu nó thuộc thư mục chuyên trách.
+Các tiện ích cũ không còn dùng đã chuyển sang `legacy/src/common/`.

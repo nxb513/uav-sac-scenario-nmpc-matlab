@@ -1,13 +1,12 @@
 # src/plant
 
-Plant phi tuyến 12 trạng thái sẽ được triển khai ở đây:
+Plant phi tuyến 12 trạng thái `x = [p; eta; v; omega]`, đầu vào `u = [T; tau_phi; tau_theta; tau_psi]`,
+dùng bởi D1:
 
-`x = [p; eta; v; omega]`
+- `quad_dynamics` (gọi `quad_rotm_zyx`, `quad_euler_rates_zyx`, `quad_saturate_input`,
+  `quad_disturbance`), `quad_step_rk4`: mô hình và tích phân RK4 (`d1_plant_step`,
+  `d1_joint_plant_params`, LQR `d1_build_lqr`, teacher `d1_teacher_build_solver`).
+- `quad_sample_uncertainty` (gọi `quad_apply_uncertainty`, `quad_inertia_consistent`): mẫu
+  plant bất định của đánh giá cuối (`d1_final_eval`).
 
-Input controller:
-
-`u = [T; tau_phi; tau_theta; tau_psi]`
-
-Plant mới không dùng lại các file `uav2_*.m` cũ.
-
-`quad_generate_disturbance_episode.m` sinh realization có seed cho constant, gust, sinusoidal và colored-stochastic external force/moment; realization này chỉ truyền vào plant và được giữ ẩn với NMPC.
+Các hàm plant cũ không còn dùng đã chuyển sang `legacy/src/plant/`.

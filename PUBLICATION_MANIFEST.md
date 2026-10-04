@@ -17,16 +17,20 @@ The public package contains, for method D1 (`docs/D1_method.pdf`):
 - `tools/wind/` (download + conversion of measured wind inside CI jobs),
   `tools/eval/summarize_final_eval.py`, `tools/eval/plot_sweep.py` and
   `tools/ci/hang_watchdog.sh`;
-- the method document `docs/D1_method.tex/.pdf` and the design note
-  `docs/D1_student_design.tex/.pdf`.
+- the method document `docs/D1_method.tex/.pdf`, the design note
+  `docs/D1_student_design.tex/.pdf` and the list of official runs `docs/D1_runs.md`.
+
+Outside `legacy/`, only the MATLAB files called by the two D1 entry points remain.
 
 Explicitly excluded for D1: SAC checkpoints and student files (they exist only as
 GitHub Actions artifacts of the runs), measured wind data (Neural-Fly is not
 redistributable; SWUF-3D is fetched from Zenodo), and evaluation outputs.
 
-## Legacy pipeline (superseded, kept for provenance; see `docs/legacy_pipeline.md`)
+## Legacy pipeline (superseded, kept for provenance; see `legacy/legacy_pipeline.md`)
 
-The public package contains only:
+Since 2026-10-04 all of it is under `legacy/` with its former relative paths (see
+`legacy/README.md`), except the files that D1 still calls, which stay in place. Nothing
+was deleted. The legacy package contains only:
 
 - six configuration functions required by the active pipeline;
 - quadrotor plant and NMPC helper functions required at runtime;

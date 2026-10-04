@@ -1,18 +1,17 @@
 function out = d1_finite_horizon_contraction(E, P, H, opts)
 %D1_FINITE_HORIZON_CONTRACTION Primary D1 finite-horizon contraction metric on the
-% Lyapunov function V = e' P e (P = discrete LQR Riccati selectedLqr.S).
+% Lyapunov function V = e' P e (P = discrete LQR Riccati solution, lqr.P of d1_build_lqr).
 %
 %   out = d1_finite_horizon_contraction(E, P, H, opts)
 %
 % Inputs:
 %   E    : 12-by-N raw tracking error (x - x_ref), ordered like the plant state.
-%          Euler-angle rows (4:6) are wrapped to (-pi, pi] internally to match
-%          nmpc_state_error (radians; NOT degrees, NOT normalized).
-%   P    : 12-by-12 symmetric positive-definite Lyapunov matrix (load via
-%          d1_load_lyapunov_P; = dlqr Riccati S).
-%   H    : forward window in steps, PASSED IN by the caller from the single
-%          source-of-truth cfg.contraction.horizonSteps (D1 frozen = 20 => 1.0 s
-%          at Ts=0.05). This module never hard-codes the horizon.
+%          Euler-angle rows (4:6) are wrapped to (-pi, pi] internally
+%          (radians; NOT degrees, NOT normalized).
+%   P    : 12-by-12 symmetric positive-definite Lyapunov matrix (lqr.P of
+%          d1_build_lqr = dlqr Riccati S).
+%   H    : forward window in steps, PASSED IN by the caller (D1: cfg.H of
+%          d1_config = 20 => 1.0 s at Ts=0.05). This module never hard-codes it.
 %   opts : struct, optional. Field V_floor (default 1e-12) is a NUMERICAL-SAFETY
 %          floor for the ratios/logs only; it is NOT a success/fail threshold.
 %
@@ -47,7 +46,7 @@ if size(E, 1) ~= 12
     error('d1_finite_horizon_contraction:BadError', 'E must have 12 rows.');
 end
 
-% Wrap Euler-angle error rows to (-pi,pi], matching nmpc_state_error convention.
+% Wrap Euler-angle error rows to (-pi,pi].
 Ew = E;
 Ew(4:6, :) = mod(Ew(4:6, :) + pi, 2 * pi) - pi;
 

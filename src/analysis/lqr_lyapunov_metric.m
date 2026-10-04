@@ -6,11 +6,11 @@ function V = lqr_lyapunov_metric(e, P)
 % Inputs:
 %   e : 12-by-N (or 12-by-1) tracking error, ordered exactly like the plant/LQR
 %       state [px py pz phi theta psi vx vy vz p q r]. Angles are in RADIANS and
-%       must already be wrapped to (-pi, pi] the same way nmpc_state_error /
-%       d1_wrap_state_error do. NO state normalization is applied before P.
+%       must already be wrapped to (-pi, pi] (d1_finite_horizon_contraction does
+%       this). NO state normalization is applied before P.
 %   P : 12-by-12 symmetric positive-definite matrix. For D1 this is the discrete
-%       Riccati solution selectedLqr.S returned by dlqr(A,B,Q_LQR,R_LQR); load it
-%       with d1_load_lyapunov_P (never recompute / hard-code it here).
+%       Riccati solution returned by dlqr(A,B,Q_LQR,R_LQR) in d1_build_lqr (lqr.P),
+%       passed in by the caller (never recompute / hard-code it here).
 %
 % Output:
 %   V : 1-by-N with V(k) = e(:,k)' * P * e(:,k). Columns whose error is

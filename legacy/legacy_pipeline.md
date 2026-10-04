@@ -5,6 +5,11 @@
 > fmincon teacher, C012 context bank) and the targeted-LQR retune/selection/weakness
 > stages. None of this is the active method. The active method is D1:
 > see `README.md` and `docs/D1_method.pdf`.
+>
+> Since 2026-10-04 the files named below are under `legacy/` with their former relative
+> paths (`experiments/x.m` is now `legacy/experiments/x.m`, `.github/workflows/matlab-*.yml`
+> is now `legacy/workflows/matlab-*.yml`), except the few still called by D1, which stay in
+> place (see `legacy/README.md`). The paths in the text below are the former ones.
 
 ---
 

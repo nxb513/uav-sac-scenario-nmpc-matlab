@@ -3,6 +3,11 @@ function cfg = targeted_lqr_weak_config()
 %
 % Candidate values support local coverage/runtime benchmarks only. They are
 % not the final training, validation or OOD grid.
+%
+% Method D1 reads only cfg.reference from this config (d1_train_cases,
+% d1_final_eval). Every other field serves the legacy scripts in legacy/; their
+% result paths refer to the former layout (the artifacts are now under
+% legacy/results/).
 
 plant = step1_plant_config();
 
@@ -13,14 +18,16 @@ cfg.sampleTime = 0.05;
 cfg.stepCount = 200;
 cfg.plant = plant;
 
-% Single source-of-truth for the D1 finite-horizon Lyapunov-contraction window
+% Legacy (older D1 stage; the current D1 pipeline uses cfg.H of d1_config and
+% lqr.P of d1_build_lqr). Finite-horizon Lyapunov-contraction window
 % (V=e'Pe over H steps). Frozen at 20 steps = H*sampleTime = 1.0 s, matching the
 % intervention lead time. Every D1 contraction caller MUST read H from here; the
 % analysis module d1_finite_horizon_contraction takes H as an argument and never
 % hard-codes it. (Distinct from the legacy cfg.predictiveAnalysis.horizonSteps.)
 cfg.contraction.horizonSteps = 20;
 
-% D1 baseline/Lyapunov LQR artifact (Bryson-designed, built by build_d1_bryson_lqr).
+% Legacy (older D1 stage): Bryson LQR artifact built by build_d1_bryson_lqr
+% (legacy/experiments/); the current D1 pipeline does not load it.
 % P = selectedLqr.S here is the Lyapunov matrix for V=e'Pe and K is the baseline
 % LQR gain. This supersedes the old grid-retuned lqr_retune_realized_coverage_v6
 % artifact for the D1 pipeline (that legacy artifact is kept but no longer used).
