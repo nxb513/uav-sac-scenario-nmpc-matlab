@@ -839,7 +839,13 @@ $F=(m/2.53)(c_1+c_2\norm{w})\,w$ với $(c_1,c_2)$ khớp bình phương tối t
 \textbf{không} báo cáo từ job CI, xem Mục~\ref{sec:cost}), $\alpha$ trung bình, tỉ
 lệ hội tụ SQP của teacher, số lần đặt lại do phân kỳ; bảng tổng hợp
 (\texttt{tools/\allowbreak eval/\allowbreak summarize\_\allowbreak final\_\allowbreak eval.py}) đếm thêm số chuyến
-mỗi bộ thắng LQR. Một chuyến
+mỗi bộ thắng LQR. \textbf{Kiểm định theo cặp} (\texttt{tools/\allowbreak eval/\allowbreak paired\_\allowbreak tests.py}):
+với P của mỗi chain so với LQR và MPC, mỗi điều kiện, trên cùng các chuyến, hiệu $d=\mathrm{RMSE}_P-\mathrm{RMSE}_{\mathrm{nền}}$
+được kiểm định bằng Wilcoxon signed-rank hai phía (Wilcoxon 1945), trên (a) các chuyến cả hai cùng hoàn thành và (b) mọi
+chuyến với RMSE đã chặn; báo số cặp, số chuyến P tốt hơn, trung vị $d$, p-value, p-value hiệu chỉnh Holm (Holm 1979)
+trên toàn bảng và hệ số rank-biserial theo cặp (Kerby 2014). Các chuyến dùng chung quỹ đạo, plant hoặc chuỗi gió nên
+không hoàn toàn độc lập, và mỗi chain là một lần huấn luyện (một seed): kiểm định nói về bộ điều khiển đã huấn luyện,
+không về độ ổn định của quy trình huấn luyện qua nhiều seed. Một chuyến
 \emph{hoàn thành} khi không có lần đặt lại nào và sai số chưa lần nào chạm mức chặn $5$ m. Lưu thêm quỹ đạo đầy
 đủ của một chuyến đại diện cho mỗi họ để vẽ hình.
 \end{itemize}
@@ -967,6 +973,11 @@ systems. Bộ dữ liệu Zenodo, record 17700905, CC-BY 4.0. (Dữ liệu gió 
 control. \emph{Journal of Process Control}, 12(5), 617--632.
 \item Pannocchia, G., \& Rawlings, J. B. (2003). Disturbance models for offset-free model-predictive control.
 \emph{AIChE Journal}, 49(2), 426--437.
+\item Wilcoxon, F. (1945). Individual comparisons by ranking methods. \emph{Biometrics Bulletin}, 1(6), 80--83.
+\item Holm, S. (1979). A simple sequentially rejective multiple test procedure. \emph{Scandinavian Journal of
+Statistics}, 6(2), 65--70.
+\item Kerby, D. S. (2014). The simple difference formula: an approach to teaching nonparametric correlation.
+\emph{Comprehensive Psychology}, 3, 11.IT.3.1.
 \item Mellinger, D., \& Kumar, V. (2011). Minimum snap trajectory generation and control for quadrotors.
 \emph{IEEE ICRA 2011}, 2520--2525. (Flatness của quadrotor.)
 \item Chen, D., Zhou, B., Koltun, V., \& Kr\"ahenb\"uhl, P. (2020). Learning by Cheating. \emph{Conference on

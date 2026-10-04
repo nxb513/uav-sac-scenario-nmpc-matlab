@@ -60,6 +60,7 @@ contains the same content within the full method.
 | `src/joint/d1_teacher_build_solver.m` | acados scenario-NMPC teacher with the wind-force parameter |
 | `tools/wind/` | Download and convert measured wind (validation only, inside CI jobs) |
 | `tools/eval/summarize_final_eval.py` | Markdown summary of the final-evaluation CSVs |
+| `tools/eval/paired_tests.py` | Paired Wilcoxon signed-rank tests of P against LQR and MPC on the same flights (Holm-adjusted) |
 | `tools/eval/plot_final_traj.py` | Final-evaluation trajectory figures: 3D paths and position error of every controller; where the student acts in P (path coloured by alpha) |
 | `src/joint/d1_teacher_pool.m` | Local parallel workers for the flights of one SAC / DAgger iteration |
 | `tools/ci/hang_watchdog.sh` | Diagnostic watchdog of the training step |

@@ -17,7 +17,7 @@ The public package contains, for method D1 (`docs/D1_method.pdf`):
   solver hang is in the history at commit `7f60828`);
 - `tools/wind/` (download + conversion of measured wind inside CI jobs),
   `tools/eval/summarize_final_eval.py`, `tools/eval/plot_sweep.py`,
-  `tools/eval/plot_final_traj.py` and
+  `tools/eval/plot_final_traj.py`, `tools/eval/paired_tests.py` and
   `tools/ci/hang_watchdog.sh`;
 - the method document `docs/D1_method.tex/.pdf`, the design note
   `docs/D1_student_design.tex/.pdf` and the list of official runs `docs/D1_runs.md`.

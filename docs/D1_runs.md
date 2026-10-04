@@ -66,7 +66,8 @@ Since then `base_ctrls=none` skips the baseline job.
 Both runs completed successfully (2026-10-04). The combined summary is
 `summarize_final_eval.py` over the CSV artifacts of 37191803718 and then 37193673007 (path
 order, so the baseline rows of 37191803718 are kept); the trajectory figures are
-`plot_final_traj.py` over the same artifacts.
+`plot_final_traj.py` over the same artifacts, and the paired tests are `paired_tests.py`
+over the same artifacts.
 
 ## Performance versus SAC iteration (DAgger sweep)
 
