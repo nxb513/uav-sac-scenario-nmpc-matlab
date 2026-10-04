@@ -26,7 +26,7 @@ on:
         default: "Teacher,P"
         type: string
       base_ctrls:
-        description: "Chain-independent controllers: LQR,MPC (empty = skip baseline job)"
+        description: "Chain-independent controllers: LQR,MPC (none = skip baseline job; an empty value is replaced by the default)"
         required: false
         default: "LQR,MPC"
         type: string
@@ -38,7 +38,7 @@ on:
 
 jobs:
   baseline:
-    if: ${{ inputs.base_ctrls != '' }}
+    if: ${{ inputs.base_ctrls != '' && inputs.base_ctrls != 'none' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     strategy:

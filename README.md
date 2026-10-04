@@ -54,6 +54,7 @@ linear student + DAgger; it is now implemented and merged into `docs/D1_method`.
 | `src/joint/d1_teacher_build_solver.m` | acados scenario-NMPC teacher with the wind-force parameter |
 | `tools/wind/` | Download and convert measured wind (validation only, inside CI jobs) |
 | `tools/eval/summarize_final_eval.py` | Markdown summary of the final-evaluation CSVs |
+| `tools/eval/plot_final_traj.py` | Final-evaluation trajectory figures: 3D paths and position error of every controller; where the student acts in P (path coloured by alpha) |
 | `src/joint/d1_teacher_pool.m` | Local parallel workers for the flights of one SAC / DAgger iteration |
 | `tools/ci/hang_watchdog.sh` | Diagnostic watchdog of the training step |
 
@@ -116,7 +117,9 @@ call (static call graph). Older scripts, including the older D1-stage scripts
     teacher and the LQR on the same 15 validation flights.
   - **Outputs:** per milestone the student file, the DAgger state and
     `sweep_seed<s>_iter<NNNN>.csv`; the summary job writes `sweep_summary.csv` and
-    `sweep_curve.png` (`tools/eval/plot_sweep.py`).
+    `sweep_curve.png` (`tools/eval/plot_sweep.py`; a second row shows the confidences of
+    each milestone's student file: c_S mean label and accuracy, c_LQR contracting share and
+    accuracy).
 - **D1 final evaluation** (`.github/workflows/d1-final-eval.yml`).
   - **Inputs:** `chains` (JSON list of `{seed, rqr, run, suffix}`, where `run` is the
     DAgger run, whose artifact holds both the SAC checkpoint and the student file), `conds`

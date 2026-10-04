@@ -53,7 +53,15 @@ over the CSVs of both runs.
 | Run | Controllers |
 |---|---|
 | 37191803718 | LQR, MPC; Teacher and P of the random-base chain |
-| dispatched by `d1-final-eval-after.yml` when 37190192312 ends | Teacher and P of the Bryson-base chain (`base_ctrls` empty) |
+| 37193673007 (dispatched by `d1-final-eval-after.yml` run 37192056531 when 37190192312 ended) | Teacher and P of the Bryson-base chain |
+
+The empty `base_ctrls` of 37193673007 was replaced by the default, so it also flew LQR and
+MPC. That duplicate equals the baseline of 37191803718 to within 2e-13 m in position RMSE on
+497 of 500 rows; the three exceptions are flights near a divergence (train flight 89,
+`vertical_circle|v12|a9`, LQR and MPC; ood flight 55, `vertical_circle|v16|a9|OOD`, LQR, one
+restart in one run and none in the other). The combined summary uses the baseline of
+37191803718.
+Since then `base_ctrls=none` skips the baseline job.
 
 ## Performance versus SAC iteration (DAgger sweep)
 

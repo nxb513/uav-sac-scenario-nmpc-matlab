@@ -28,9 +28,9 @@ on:
         default: "Teacher,P"
         type: string
       base_ctrls:
-        description: "base_ctrls input of d1-final-eval.yml (empty = skip baseline job)"
+        description: "base_ctrls input of d1-final-eval.yml (none = skip baseline job)"
         required: false
-        default: ""
+        default: "none"
         type: string
       solver:
         required: false
