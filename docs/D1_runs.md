@@ -3,7 +3,8 @@
 GitHub keeps run artifacts for 30 days (the artifacts of the runs below expire from
 2026-11-02). The author keeps a copy of the artifacts of every run listed here, available on
 request. The artifacts of the final test (the DAgger runs at SAC iteration 100 and the two
-final-evaluation runs) and the local timing CSVs are attached permanently to the release
+final-evaluation runs), the local timing CSVs and the sweep CSV and student files of both sweep
+runs are attached permanently to the release
 [`d1-paper-v1.0`](https://github.com/nxb513/uav-sac-scenario-nmpc-matlab/releases/tag/d1-paper-v1.0).
 
 Only the GitHub Actions runs listed here are results of the current D1 code and setup
@@ -89,7 +90,12 @@ Run 37191810147 runs on tag `d1-final-iter100` (same DAgger code). The point at 
 `sweep_seed<s>_iter0100.csv`.
 
 One job of 37171887012 (Bryson, iteration 12) was cancelled by the runner and rerun as
-attempt 2 of the same run.
+attempt 2 of the same run. Run 37191810147 completed on 2026-10-04 (107 jobs, all successful).
+
+The LQR validation RMSE of the Bryson-base chain (same 15 flights and code at every checkpoint)
+is 0.642433 m on 26 checkpoints, including iteration 100, and 0.643859 m on the other 66; the
+cause of this difference was not investigated. The random-base chain gives 0.377982 m at every
+checkpoint.
 
 ## Computation time on one local machine (not a CI run)
 

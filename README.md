@@ -167,7 +167,8 @@ checkpoints, student files and evaluation outputs are GitHub Actions artifacts o
 which GitHub keeps for 30 days; the author keeps a copy of the artifacts of every official run
 (`docs/D1_runs.md`), available on request. The outputs of the final test (SAC iteration 100:
 checkpoints, DAgger and student files of both chains, final-evaluation CSVs and trajectories,
-local timing) are attached permanently to the release
+local timing) and the sweep CSV and student files of every SAC iteration are attached permanently
+to the release
 [`d1-paper-v1.0`](https://github.com/nxb513/uav-sac-scenario-nmpc-matlab/releases/tag/d1-paper-v1.0).
 
 The code is released under the MIT License (`LICENSE`).
