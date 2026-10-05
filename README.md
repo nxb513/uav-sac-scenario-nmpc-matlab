@@ -64,6 +64,7 @@ contains the same content within the full method.
 | `tools/eval/plot_final_traj.py` | Final-evaluation trajectory figures: 3D paths and position error of every controller; where the student acts in P (path coloured by alpha) |
 | `src/joint/d1_teacher_pool.m` | Local parallel workers for the flights of one SAC / DAgger iteration |
 | `tools/ci/hang_watchdog.sh` | Diagnostic watchdog of the training step |
+| `tools/paper/` | Figures, tables and quoted numbers of the D1 paper from the release data (see `tools/paper/README.md`) |
 
 The diagnostic replay used to find the solver hang (`experiments/d1_diag_replay.m`,
 `d1-diag-replay.yml`, `tools/ci/d1_set_ftz.c`, `diag_watchdog.sh`, `diag_gdb.py`) is kept
@@ -151,6 +152,11 @@ training itself.
 
 The former `matlab-*.yml` workflows of the legacy pipeline are in `legacy/workflows/`;
 GitHub no longer offers them, and their runs remain in the Actions history.
+
+## Reproducing the paper
+
+`tools/paper/README.md` maps every table, figure and quoted number of the D1 paper to the
+script that produces it from the archives of the release `d1-paper-v1.0`.
 
 ## Data
 

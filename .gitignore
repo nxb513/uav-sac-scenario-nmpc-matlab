@@ -16,3 +16,5 @@ legacy/results/targeted_lqr_weak_rebuild_v1/specialist_teacher_closed_loop_capab
 .DS_Store
 Thumbs.db
 .vscode/
+__pycache__/
+*.pyc

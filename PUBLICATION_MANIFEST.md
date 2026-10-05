@@ -13,12 +13,13 @@ The public package contains, for method D1 (`docs/D1_method.pdf`):
   utilities they call (`configs/step1_plant_config.m`, `quad_dynamics`, `quad_step_rk4`,
   reference generators, `targeted_lqr_weak_config`);
 - the workflows `d1-joint-pipeline.yml`, `d1-sweep.yml` (DAgger on every SAC milestone:
-  performance versus SAC iteration) and `d1-final-eval.yml` (the diagnostic replay of the
-  solver hang is in the history at commit `7f60828`);
+  performance versus SAC iteration), `d1-final-eval.yml` and `d1-final-eval-after.yml` (the
+  diagnostic replay of the solver hang is in the history at commit `7f60828`);
 - `tools/wind/` (download + conversion of measured wind inside CI jobs),
   `tools/eval/summarize_final_eval.py`, `tools/eval/plot_sweep.py`,
-  `tools/eval/plot_final_traj.py`, `tools/eval/paired_tests.py` and
-  `tools/ci/hang_watchdog.sh`;
+  `tools/eval/plot_final_traj.py`, `tools/eval/paired_tests.py`,
+  `tools/ci/hang_watchdog.sh` and `tools/paper/` (figures, tables and quoted numbers of the D1
+  paper from the release data);
 - the method document `docs/D1_method.tex/.pdf`, the design note
   `docs/D1_student_design.tex/.pdf` and the list of official runs `docs/D1_runs.md`.
 
